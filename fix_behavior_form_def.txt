@@ -1,0 +1,42 @@
+function BehaviorForm({ targetUser, onDone, initialData, st5History }) {
+  const [selections, setSelections] = useState(
+    initialData ? initialData.selections : { desirable: [], undesirable: [], st5ReferenceId: '' }
+  );
+
+  const toggleSelection = (type, item) => {
+    setSelections(prev => {
+      const current = prev[type] || [];
+      return current.includes(item) 
+        ? { ...prev, [type]: current.filter(i => i !== item) }
+        : { ...prev, [type]: [...current, item] };
+    });
+  };
+
+  const handleSave = async () => {
+    let finalTimestamp = Date.now();
+    
+    if (initialData) {
+      finalTimestamp = initialData.timestamp;
+    } else if (selections.st5ReferenceId && st5History) {
+      const matchedSt5 = st5History.find(s => s.id === selections.st5ReferenceId);
+      if (matchedSt5) {
+        finalTimestamp = matchedSt5.timestamp;
+      }
+    }
+
+    const payload = { targetUid: targetUser.id, targetName: targetUser.name, selections, timestamp: finalTimestamp };
+    
+    if (initialData && initialData.id) {
+      // โหมดแก้ไข
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', initialData.id), { selections });
+      syncToGoogleSheet('EDIT_BEHAVIOR', payload);
+    } else {
+      // โหมดสร้างใหม่
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'behaviors'), payload);
+      syncToGoogleSheet('BEHAVIOR', payload);
+    }
+    
+    onDone();
+  };
+
+  const renderSection = (type, categories, colorTheme) => (

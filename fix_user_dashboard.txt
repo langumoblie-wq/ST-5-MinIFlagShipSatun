@@ -1,0 +1,29 @@
+                      <tr key={idx} className="border-b border-slate-50 hover:bg-slate-50/50 transition">
+                        <td className="p-4">
+                          <div className="font-bold text-sky-500">ครั้งที่ {myHistory.length - idx}</div>
+                          <div className="text-xs text-slate-400 mt-0.5">{new Date(item.timestamp).toLocaleDateString('th-TH')}</div>
+                        </td>
+                        <td className="p-4 text-center font-black text-slate-700 text-lg">{item.score}</td>
+                        <td className="p-4">
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                            <span className={`px-4 py-1.5 rounded-full text-xs font-bold border whitespace-nowrap shadow-sm ${status.color}`}>
+                              {item.level}
+                            </span>
+                            <button 
+                              onClick={() => setSt5Result({ score: item.score, ...status, evaluationNumber: myHistory.length - idx })} 
+                              className="text-xs bg-white text-purple-600 px-3 py-1.5 border border-purple-200 rounded-full hover:bg-purple-50 transition font-bold shadow-sm whitespace-nowrap"
+                            >
+                              ดูแนวทางวิชาการ
+                            </button>
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          {item.suggestion ? (
+                            <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-2xl text-indigo-700 text-sm leading-relaxed">
+                              {item.suggestion}
+                            </div>
+                          ) : (
+                            <span className="text-slate-300 italic text-xs">คุณครูกำลังพิจารณาข้อมูล...</span>
+                          )}
+                        </td>
+                      </tr>

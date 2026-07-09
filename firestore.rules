@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isValidString(val, min, max) {
+      return val is string && val.size() >= min && val.size() <= max;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /artifacts/31b45e5f-9483-4bc1-95a4-d5229107671f/public/data {
+      
+      match /users/{userId} {
+        // App currently uses custom auth, allowing read for login verification
+        allow read: if true;
+        allow create: if 
+          incoming().keys().hasAll(['id', 'username', 'password', 'name', 'createdAt']) &&
+          incoming().id == userId &&
+          isValidString(incoming().username, 3, 50) &&
+          isValidString(incoming().password, 4, 100) &&
+          isValidString(incoming().name, 1, 100) &&
+          incoming().createdAt is number;
+        allow update: if 
+          incoming().diff(resource.data).affectedKeys().hasOnly(['name', 'password', 'updatedAt']);
+      }
+      
+      match /st5/{docId} {
+        allow read: if true;
+        allow create: if
+          incoming().keys().hasAll(['id', 'userId', 'score', 'timestamp', 'answers']) &&
+          incoming().id == docId &&
+          incoming().score is number && incoming().score >= 0 && incoming().score <= 15 &&
+          incoming().timestamp is number &&
+          incoming().answers is list &&
+          incoming().answers.size() == 5;
+        allow update, delete: if false; 
+      }
+      
+      match /behaviors/{docId} {
+        allow read: if true;
+        allow create: if
+          incoming().keys().hasAll(['id', 'userId', 'behaviorScore', 'timestamp', 'answers']) &&
+          incoming().id == docId &&
+          incoming().behaviorScore is number && incoming().behaviorScore >= 0 && incoming().behaviorScore <= 15 &&
+          incoming().timestamp is number &&
+          incoming().answers is list &&
+          incoming().answers.size() == 5;
+        allow update, delete: if false;
+      }
+    }
+  }
+}

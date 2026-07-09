@@ -1,0 +1,26 @@
+  return (
+    <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/40 border border-slate-100 mt-6 animate-in fade-in slide-in-from-top-4 duration-300">
+      <div className="mb-8">
+        <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+          <Star className="text-amber-400" size={24}/> {initialData ? 'แก้ไขการประเมินพฤติกรรม' : 'ประเมินพฤติกรรมนักเรียน'}
+        </h3>
+        <p className="text-sm text-slate-500 mt-2 font-medium">ทำเครื่องหมายพฤติกรรมที่พบ เพื่อจัดทำแผนพัฒนารายบุคคล</p>
+      </div>
+
+      {!initialData && st5History && st5History.length > 0 && (
+        <div className="mb-6 p-5 bg-sky-50 rounded-[2rem] border border-sky-100">
+          <label className="block text-sm font-bold text-sky-700 mb-2">อ้างอิงกับการประเมิน ST-5 ครั้งที่:</label>
+          <select 
+            className="w-full p-3.5 border border-sky-200 rounded-2xl bg-white outline-none focus:ring-4 focus:ring-sky-500/20 focus:border-sky-400 text-sm font-medium text-slate-700"
+            value={selections.st5ReferenceId || ''}
+            onChange={(e) => setSelections(prev => ({ ...prev, st5ReferenceId: e.target.value }))}
+          >
+            <option value="">-- ไม่ระบุ (ประเมินอิสระ) --</option>
+            {st5History.map((item, idx) => (
+              <option key={item.id} value={item.id}>
+                ครั้งที่ {st5History.length - idx} ({new Date(item.timestamp).toLocaleDateString('th-TH')})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}

@@ -1,0 +1,12 @@
+      {showBehaviorForm && (
+        <BehaviorForm 
+          targetUser={student} 
+          initialData={editingBehavior}
+          st5History={st5History}
+          onDone={() => { 
+            setShowBehaviorForm(false); 
+            setEditingBehavior(null);
+            triggerAlert(editingBehavior ? 'อัปเดตผลการประเมินพฤติกรรมเรียบร้อย' : 'บันทึกผลการประเมินพฤติกรรมลงระบบเรียบร้อย', 'success'); 
+          }} 
+        />
+      )}

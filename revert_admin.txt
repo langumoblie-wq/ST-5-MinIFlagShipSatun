@@ -1,0 +1,14 @@
+  const students = users.filter(u => ['student', 'community', 'teacher'].includes(u.accountType) && u.affiliation === profile.affiliation);
+
+  if (selectedUser) return <AdminStudentDetail student={selectedUser} st5History={st5Data.filter(d => d.uid === selectedUser.id)} behaviorHistory={behaviorData.filter(d => d.targetUid === selectedUser.id)} onBack={() => setSelectedUser(null)} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />;
+
+  return (
+    <div className="space-y-6">
+      {showAddUser && <AddUserModal onClose={() => setShowAddUser(false)} onAdd={handleAddUser} getAffiliationOptions={getAffiliationOptions} profile={profile} currentAffiliation={profile.affiliation} />}
+      <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
+        <div className="flex justify-between items-start"><h2 className="text-2xl font-black text-slate-800 flex items-center gap-2"><ClipboardList className="text-purple-400"/> รายชื่อในความดูแล</h2><button onClick={() => setShowAddUser(true)} className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md hover:bg-purple-700 flex items-center gap-2 transition"><Plus size={16}/> เพิ่มข้อมูล</button></div>
+        <div className="mt-2 inline-flex items-center gap-2 bg-purple-50 px-3 py-1.5 rounded-full border border-purple-100">
+           <span className="text-xs font-bold text-purple-400">สังกัด</span>
+           <span className="text-sm font-semibold text-purple-700">{profile.affiliation}</span>
+        </div>
+      </div>

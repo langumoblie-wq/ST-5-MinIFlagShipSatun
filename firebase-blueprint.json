@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "username", "password"]
+    },
+    "St5Record": {
+      "title": "St5Record",
+      "description": "ST-5 evaluation record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "score": { "type": "number" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["userId", "score", "timestamp"]
+    },
+    "BehaviorRecord": {
+      "title": "BehaviorRecord",
+      "description": "Behavior evaluation record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "behaviorScore": { "type": "number" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["userId", "behaviorScore", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/artifacts/31b45e5f-9483-4bc1-95a4-d5229107671f/public/data/users/{userId}": {
+      "schema": "User",
+      "description": "User accounts"
+    },
+    "/artifacts/31b45e5f-9483-4bc1-95a4-d5229107671f/public/data/st5/{docId}": {
+      "schema": "St5Record",
+      "description": "ST-5 evaluation records"
+    },
+    "/artifacts/31b45e5f-9483-4bc1-95a4-d5229107671f/public/data/behaviors/{docId}": {
+      "schema": "BehaviorRecord",
+      "description": "Behavior records"
+    }
+  }
+}
