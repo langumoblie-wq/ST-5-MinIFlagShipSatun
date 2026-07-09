@@ -405,7 +405,7 @@ export default function App() {
           </div>
         ) : (
           <div className="max-w-7xl mx-auto space-y-6 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {activeTab === 'dashboard' && profile.role === 'user' && <UserDashboard profile={profile} st5Data={st5Data} triggerAlert={triggerAlert} />}
+            {activeTab === 'dashboard' && profile.role === 'user' && <UserDashboard profile={profile} st5Data={st5Data} behaviorData={behaviorData} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
             {activeTab === 'dashboard' && profile.role === 'admin' && <AdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
             {activeTab === 'dashboard' && profile.role === 'superadmin' && <SuperAdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
             {activeTab === 'analytics' && (profile.role === 'admin' || profile.role === 'superadmin') && (
@@ -902,20 +902,29 @@ function RegisterForm({ onRegisterSuccess }) {
 // ==========================================
 // USER DASHBOARD
 // ==========================================
-function UserDashboard({ profile, st5Data, triggerAlert }) {
+function UserDashboard({ profile, st5Data, behaviorData, triggerAlert, triggerConfirm }) {
   const [showST5, setShowST5] = useState(false);
-  const [st5Result, setSt5Result] = useState(null); 
+  const [st5Result, setSt5Result] = useState(null);
+  const [editingST5, setEditingST5] = useState(null); 
   const myHistory = st5Data.filter(d => d.uid === profile.id || d.userId === profile.id);
 
   const handleSubmitST5 = async (answers, score) => {
     const st5Obj = calculateST5(score);
-    const payload = { uid: profile.id, userId: profile.id, userName: profile.name, answers, score, level: st5Obj.level, timestamp: Date.now(), suggestion: '' };
-    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'st5'), payload);
-    syncToGoogleSheet('ST5', payload);
+    const payload = { uid: profile.id, userId: profile.id, userName: profile.name, answers, score, level: st5Obj.level, timestamp: editingST5 ? editingST5.timestamp : Date.now(), suggestion: editingST5 ? editingST5.suggestion : '' };
+    
+    if (editingST5) {
+       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', editingST5.id), payload);
+       triggerAlert('แก้ไขข้อมูลการคัดกรอง ST-5 เรียบร้อยแล้วค่ะ', 'success');
+       setEditingST5(null);
+    } else {
+       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'st5'), payload);
+       syncToGoogleSheet('ST5', payload);
+       triggerAlert('บันทึกผลการคัดกรอง ST-5 ลงระบบและ Google Sheets เรียบร้อยแล้วค่ะ', 'success');
+       setSt5Result({ score, ...st5Obj }); 
+    }
     setShowST5(false);
-    setSt5Result({ score, ...st5Obj }); 
-    triggerAlert('บันทึกผลการคัดกรอง ST-5 ลงระบบและ Google Sheets เรียบร้อยแล้วค่ะ', 'success');
   };
+
 
   return (
     <div className="space-y-6">
@@ -939,7 +948,7 @@ function UserDashboard({ profile, st5Data, triggerAlert }) {
       )}
       
       {showST5 && !st5Result && (
-        <ST5Form onSubmit={handleSubmitST5} onCancel={() => setShowST5(false)} />
+        <ST5Form onSubmit={handleSubmitST5} onCancel={() => { setShowST5(false); setEditingST5(null); }} initialData={editingST5} />
       )}
 
       {!showST5 && !st5Result && (
@@ -959,6 +968,7 @@ function UserDashboard({ profile, st5Data, triggerAlert }) {
                     <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs text-center">คะแนนรวม</th>
                     <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs">ระดับความเครียด</th>
                     <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs">ข้อเสนอแนะความห่วงใย</th>
+                    <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs text-center">จัดการ</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -984,6 +994,14 @@ function UserDashboard({ profile, st5Data, triggerAlert }) {
                           ) : (
                             <span className="text-slate-300 italic text-xs">คุณครูกำลังพิจารณาข้อมูล...</span>
                           )}
+                        </td>
+                        <td className="p-4 text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <button onClick={() => { setEditingST5(item); setShowST5(true); }} className="text-xs bg-sky-50 text-sky-600 px-3 py-1.5 border border-sky-200 rounded-full hover:bg-sky-100 transition font-bold shadow-sm">
+                              แก้ไข
+                            </button>
+
+                          </div>
                         </td>
                       </tr>
                     );
@@ -2383,8 +2401,8 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
 // ==========================================
 // FORM COMPONENTS
 // ==========================================
-function ST5Form({ onSubmit, onCancel }) {
-  const [answers, setAnswers] = useState(Array(5).fill(null));
+function ST5Form({ onSubmit, onCancel, initialData }) {
+  const [answers, setAnswers] = useState(initialData?.answers || Array(5).fill(null));
   const isComplete = answers.every(a => a !== null);
   const totalScore = answers.reduce((a, b) => a + (b || 0), 0);
 
