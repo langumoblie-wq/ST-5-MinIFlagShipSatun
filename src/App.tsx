@@ -405,7 +405,7 @@ export default function App() {
           </div>
         ) : (
           <div className="max-w-7xl mx-auto space-y-6 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {activeTab === 'dashboard' && profile.role === 'user' && <UserDashboard profile={profile} st5Data={st5Data} behaviorData={behaviorData} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
+            {activeTab === 'dashboard' && profile.role === 'user' && <UserDashboard users={usersList} profile={profile} st5Data={st5Data} behaviorData={behaviorData} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
             {activeTab === 'dashboard' && profile.role === 'admin' && <AdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
             {activeTab === 'dashboard' && profile.role === 'superadmin' && <SuperAdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
             {activeTab === 'analytics' && (profile.role === 'admin' || profile.role === 'superadmin') && (
@@ -902,8 +902,11 @@ function RegisterForm({ onRegisterSuccess }) {
 // ==========================================
 // USER DASHBOARD
 // ==========================================
-function UserDashboard({ profile, st5Data, behaviorData, triggerAlert, triggerConfirm }) {
+function UserDashboard({ users, profile, st5Data, behaviorData, triggerAlert, triggerConfirm }) {
   const [showST5, setShowST5] = useState(false);
+  const myAdmins = users?.filter(u => u.role === 'admin' && u.affiliation === profile.affiliation && u.status === 'approved') || [];
+  const projectMentors = users?.filter(u => u.role === 'superadmin') || [];
+
   const [st5Result, setSt5Result] = useState(null);
   const [editingST5, setEditingST5] = useState(null); 
   const myHistory = st5Data.filter(d => d.uid === profile.id || d.userId === profile.id);
@@ -934,6 +937,29 @@ function UserDashboard({ profile, st5Data, behaviorData, triggerAlert, triggerCo
              <Star className="text-amber-400 fill-amber-400" size={28}/> พื้นที่ของฉัน
           </h2>
           <p className="text-slate-500 text-sm mt-1">ยินดีต้อนรับกลับมานะ สำรวจสุขภาพใจของคุณกันเถอะ</p>
+        </div>
+        
+        <div className="flex-1 w-full md:w-auto mt-4 md:mt-0 flex flex-col md:flex-row gap-3">
+           {myAdmins.length > 0 && (
+             <div className="bg-sky-50 border border-sky-100 p-3 rounded-2xl flex-1">
+                <p className="text-[10px] font-bold text-sky-600 mb-1">ครู/ผู้รับผิดชอบ (Admin)</p>
+                <div className="flex flex-wrap gap-2">
+                  {myAdmins.map(a => (
+                     <span key={a.id} className="text-xs font-medium text-slate-700 bg-white px-2 py-1 rounded-lg border border-sky-100">{a.name}</span>
+                  ))}
+                </div>
+             </div>
+           )}
+           {projectMentors.length > 0 && (
+             <div className="bg-purple-50 border border-purple-100 p-3 rounded-2xl flex-1">
+                <p className="text-[10px] font-bold text-purple-600 mb-1">พี่เลี้ยงโครงการ</p>
+                <div className="flex flex-wrap gap-2">
+                  {projectMentors.map(m => (
+                     <span key={m.id} className="text-xs font-medium text-slate-700 bg-white px-2 py-1 rounded-lg border border-purple-100">{m.name}</span>
+                  ))}
+                </div>
+             </div>
+           )}
         </div>
         {!showST5 && !st5Result && (
            <button onClick={() => setShowST5(true)} className="bg-gradient-to-r from-sky-400 to-indigo-400 text-white px-6 py-3.5 rounded-2xl text-sm font-bold hover:opacity-90 shadow-lg shadow-sky-200 transition transform hover:-translate-y-0.5">
