@@ -216,6 +216,47 @@ export default function App() {
     });
   };
 
+  const [downloadPdfUser, setDownloadPdfUser] = useState(null);
+
+  const triggerDownloadConsentPdf = async (user) => {
+    setDownloadPdfUser(user);
+    setTimeout(async () => {
+      const element = document.getElementById(`consent-pdf-generic`);
+      if (!element) return;
+      const originalStyles = {
+        position: element.style.position,
+        left: element.style.left,
+        top: element.style.top,
+        width: element.style.width,
+      };
+      element.style.position = 'absolute';
+      element.style.left = '0';
+      element.style.top = '0';
+      element.style.width = '800px';
+      element.style.zIndex = '-9999';
+      try {
+        triggerAlert('กำลังสร้างไฟล์ PDF กรุณารอสักครู่...', 'info');
+        const dataUrl = await toPng(element, { quality: 0.95, pixelRatio: 2, backgroundColor: '#ffffff' });
+        const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+        const imgProps = pdf.getImageProperties(dataUrl);
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+        pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
+        pdf.save(`ConsentForm_${user.name}.pdf`);
+        triggerAlert('โหลด Consent Form สำเร็จ', 'success');
+      } catch (err) {
+        console.error(err);
+        triggerAlert('เกิดข้อผิดพลาดในการสร้าง PDF', 'error');
+      } finally {
+        element.style.position = originalStyles.position;
+        element.style.left = originalStyles.left;
+        element.style.top = originalStyles.top;
+        element.style.width = originalStyles.width;
+        setDownloadPdfUser(null);
+      }
+    }, 500);
+  };
+
   useEffect(() => {
     const link = document.createElement('link');
     link.href = 'https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap';
@@ -406,8 +447,8 @@ export default function App() {
         ) : (
           <div className="max-w-7xl mx-auto space-y-6 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {activeTab === 'dashboard' && profile.role === 'user' && <UserDashboard users={usersList} profile={profile} st5Data={st5Data} behaviorData={behaviorData} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
-            {activeTab === 'dashboard' && profile.role === 'admin' && <AdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
-            {activeTab === 'dashboard' && profile.role === 'superadmin' && <SuperAdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
+            {activeTab === 'dashboard' && profile.role === 'admin' && <AdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} triggerDownloadConsentPdf={triggerDownloadConsentPdf} />}
+            {activeTab === 'dashboard' && profile.role === 'superadmin' && <SuperAdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} triggerDownloadConsentPdf={triggerDownloadConsentPdf} />}
             {activeTab === 'analytics' && (profile.role === 'admin' || profile.role === 'superadmin') && (
               <ExecutiveAnalyticsDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} />
             )}
@@ -426,6 +467,20 @@ export default function App() {
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}} />
+
+      {/* Hidden Div for Generating Consent PDF via triggerDownloadConsentPdf */}
+      {downloadPdfUser && (
+        <div className="fixed top-[-9999px] left-[-9999px] w-[800px] bg-white text-black overflow-hidden pointer-events-none z-[-100]">
+           <div id="consent-pdf-generic">
+             <ConsentDocument 
+                 name={downloadPdfUser.name} 
+                 dateStr={downloadPdfUser.createdAt ? new Date(downloadPdfUser.createdAt).toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' }) : new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}
+                 hidePrintBtn={true}
+                 onPrint={() => {}}
+             />
+           </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1231,11 +1286,11 @@ function BehaviorResultSummary({ selections, onSummaryClose }) {
 // ==========================================
 // ADMIN DASHBOARD
 // ==========================================
-function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, triggerConfirm }) {
+function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, triggerConfirm, triggerDownloadConsentPdf }) {
   const [selectedUser, setSelectedUser] = useState(null);
   const students = users.filter(u => ['student', 'community', 'teacher'].includes(u.accountType) && u.affiliation === profile.affiliation);
 
-  if (selectedUser) return <AdminStudentDetail student={selectedUser} st5History={st5Data.filter(d => d.uid === selectedUser.id || d.userId === selectedUser.id)} behaviorHistory={behaviorData.filter(d => d.targetUid === selectedUser.id)} onBack={() => setSelectedUser(null)} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />;
+  if (selectedUser) return <AdminStudentDetail student={selectedUser} st5History={st5Data.filter(d => d.uid === selectedUser.id || d.userId === selectedUser.id)} behaviorHistory={behaviorData.filter(d => d.targetUid === selectedUser.id)} onBack={() => setSelectedUser(null)} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} triggerDownloadConsentPdf={triggerDownloadConsentPdf} />;
 
   return (
     <div className="space-y-6">
@@ -1278,7 +1333,7 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
   );
 }
 
-function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, triggerAlert, triggerConfirm }) {
+function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, triggerAlert, triggerConfirm, triggerDownloadConsentPdf }) {
   const [showBehaviorForm, setShowBehaviorForm] = useState(false);
   const [editingBehavior, setEditingBehavior] = useState(null);
   const [viewingSt5Result, setViewingSt5Result] = useState(null); 
@@ -1463,7 +1518,7 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
 // ==========================================
 // SUPERADMIN DASHBOARD
 // ==========================================
-function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, triggerConfirm }) {
+function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, triggerConfirm, triggerDownloadConsentPdf }) {
   const [editingUser, setEditingUser] = useState(null);
   
   const displayUsers = profile.id === 'rung' ? users : users.filter(u => Array.isArray(profile.affiliation) ? profile.affiliation.includes(u.affiliation) : u.affiliation === profile.affiliation);
@@ -1568,6 +1623,9 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
                   <td className="p-4 text-right">
                     {(u.role === 'user' || u.role === 'admin') ? (
                       <div className="flex items-center justify-end gap-2">
+                        <button onClick={() => triggerDownloadConsentPdf(u)} className="text-purple-500 hover:bg-purple-50 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1">
+                           <Download size={12}/> PDF
+                        </button>
                         <button onClick={() => toggleStatus(u.id, u.status, u.name)} className={`${u.status === 'suspended' ? 'text-emerald-500 hover:bg-emerald-50' : 'text-amber-500 hover:bg-amber-50'} px-3 py-1.5 rounded-lg text-xs font-bold transition`}>
                           {u.status === 'suspended' ? 'ปลดระงับ' : 'ระงับ'}
                         </button>
