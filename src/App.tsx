@@ -1368,23 +1368,28 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
              <p className="text-slate-500 text-sm mt-1 font-medium bg-slate-50 px-3 py-1 rounded-lg inline-block">ID: {student.id}</p>
            </div>
         </div>
-        <button onClick={() => { 
-            if (st5History.length === 0) {
-               triggerAlert('ไม่สามารถประเมินพฤติกรรมได้ เนื่องจากยังไม่มีข้อมูลการประเมินสุขภาพจิต (ST-5)', 'error');
-               return;
-            }
-            if (showBehaviorForm && !editingBehavior) {
-               setShowBehaviorForm(false);
-            } else {
-               setEditingBehavior(null);
-               setShowBehaviorForm(true);
-               setViewingBehaviorResult(null);
-            }
-          }} 
-          className="bg-slate-800 text-white px-6 py-4 rounded-2xl font-bold hover:bg-slate-700 shadow-md transition w-full md:w-auto text-sm"
-        >
-          {showBehaviorForm && !editingBehavior ? 'ปิดฟอร์มประเมิน' : '+ ประเมินพฤติกรรม'}
-        </button>
+                <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+          <button onClick={() => triggerDownloadConsentPdf(student)} className="bg-purple-100 text-purple-700 px-6 py-4 rounded-2xl font-bold hover:bg-purple-200 shadow-sm transition w-full md:w-auto text-sm flex items-center justify-center gap-2">
+            <Download size={18} /> โหลด Consent Form
+          </button>
+          <button onClick={() => {
+               if (st5History.length === 0) {
+                 triggerAlert('ไม่สามารถประเมินพฤติกรรมได้ เนื่องจากยังไม่มีข้อมูลการประเมินสุขภาพจิต (ST-5)', 'error');
+                 return;
+              }
+              if (showBehaviorForm && !editingBehavior) {
+                 setShowBehaviorForm(false);
+              } else {
+                 setEditingBehavior(null);
+                 setShowBehaviorForm(true);
+                 setViewingBehaviorResult(null);
+              }
+            }} 
+             className="bg-slate-800 text-white px-6 py-4 rounded-2xl font-bold hover:bg-slate-700 shadow-md transition w-full md:w-auto text-sm"
+          >
+            {showBehaviorForm && !editingBehavior ? 'ปิดฟอร์มประเมิน' : '+ ประเมินพฤติกรรม'}
+          </button>
+        </div>
       </div>
 
       {/* POPUP MODAL: รายละเอียดวิชาการ ST-5 */}
