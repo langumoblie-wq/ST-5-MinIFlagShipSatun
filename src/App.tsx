@@ -2048,12 +2048,39 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
 
   // --- NEGATIVE BEHAVIORS DATA ---
   const negBehaviorsList = [
-    "การใช้ความรุนแรงและรังแกกัน (Bullying)", "การใช้สารเสพติด", "การพนัน", "การหนีเรียน", "การหมกมุ่นกับสื่อออนไลน์"
+    "การใช้ความรุนแรงและรังแกกัน (Bullying)", 
+    "การก่อความเดือดร้อนรำคาญ",
+    "การใช้สารเสพติด", 
+    "การพนัน", 
+    "พฤติกรรมทางเพศที่ไม่ปลอดภัย",
+    "ภาวะซึมเศร้าและวิตกกังวล",
+    "อารมณ์ฉุนเฉียวและก้าวร้าว",
+    "การหนีเรียน", 
+    "พฤติกรรมถดถอยในการเรียน",
+    "การหมกมุ่นกับสื่อออนไลน์"
   ];
-  const negativeChartData = negBehaviorsList.map(item => ({
-    name: item.replace('การ', '').replace('ความรุนแรงและรังแกกัน (Bullying)', 'Bullying').replace('หมกมุ่นกับสื่อออนไลน์', 'ติดเกม/สื่อ'),
-    count: countBehavior(item, 'bad')
-  })).sort((a, b) => b.count - a.count);
+
+  const negativeChartData = negBehaviorsList.map(item => {
+    let shortName = item;
+    if (item === "การใช้ความรุนแรงและรังแกกัน (Bullying)") shortName = "Bullying";
+    else if (item === "การก่อความเดือดร้อนรำคาญ") shortName = "เดือดร้อนรำคาญ";
+    else if (item === "การใช้สารเสพติด") shortName = "สารเสพติด";
+    else if (item === "การพนัน") shortName = "พนัน";
+    else if (item === "พฤติกรรมทางเพศที่ไม่ปลอดภัย") shortName = "พฤติกรรมทางเพศ";
+    else if (item === "ภาวะซึมเศร้าและวิตกกังวล") shortName = "ซึมเศร้า/วิตกกังวล";
+    else if (item === "อารมณ์ฉุนเฉียวและก้าวร้าว") shortName = "ก้าวร้าว";
+    else if (item === "การหนีเรียน") shortName = "หนีเรียน";
+    else if (item === "พฤติกรรมถดถอยในการเรียน") shortName = "เรียนถดถอย";
+    else if (item === "การหมกมุ่นกับสื่อออนไลน์") shortName = "ติดสื่อออนไลน์";
+    
+    return {
+      name: shortName,
+      count: countBehavior(item, 'bad')
+    };
+  }).sort((a, b) => b.count - a.count);
+
+  const radarMaxPos = Math.max(...radarData.map(d => d.A));
+  const radarDomainMax = radarMaxPos === 0 ? 1 : 'dataMax';
 
   // --- AI INSIGHTS ENGINE ---
   const generateAIInsights = () => {
@@ -2127,10 +2154,14 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
   const trendInterpretation = `การแปรผล: คะแนนความเครียดเฉลี่ยปัจจุบันอยู่ที่ ${avgSt5.toFixed(1)} คะแนน (จากเต็ม 15) ภาพรวมอยู่ในระดับ${avgSt5 > 7 ? 'ที่ควรเฝ้าระวัง' : 'ปกติ'}`;
 
   const maxPositive = radarData.reduce((max, current) => current.A > (max?.A || 0) ? current : max, radarData[0]);
-  const positiveInterpretation = `การแปรผล: จุดแข็งที่พบมากที่สุดคือ "${maxPositive?.subject || 'ไม่มีข้อมูล'}" ควรส่งเสริมเพื่อเป็นปัจจัยปกป้อง`;
+  const positiveInterpretation = radarMaxPos === 0 
+    ? 'การแปรผล: ปัจจุบันยังไม่พบข้อมูลพฤติกรรมเชิงบวก' 
+    : `การแปรผล: จุดแข็งที่พบมากที่สุดคือ "${maxPositive?.subject || 'ไม่มีข้อมูล'}" ควรส่งเสริมเพื่อเป็นปัจจัยปกป้อง`;
 
   const maxNegative = negativeChartData[0];
-  const negativeInterpretation = `การแปรผล: พฤติกรรมเสี่ยงที่พบสูงสุดคือ "${maxNegative?.name || 'ไม่มีข้อมูล'}" ควรมีมาตรการดูแลอย่างใกล้ชิด`;
+  const negativeInterpretation = maxNegative?.count === 0 
+    ? 'การแปรผล: ปัจจุบันยังไม่พบพฤติกรรมเสี่ยงที่ต้องเฝ้าระวัง' 
+    : `การแปรผล: พฤติกรรมเสี่ยงที่พบสูงสุดคือ "${maxNegative?.name || 'ไม่มีข้อมูล'}" ควรมีมาตรการดูแลอย่างใกล้ชิด`;
 
   return (
     <div className="space-y-6 md:space-y-8 animate-in fade-in">
@@ -2351,8 +2382,8 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
                   <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
                     <PolarGrid stroke="#e2e8f0" />
                     <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }} />
-                    <PolarRadiusAxis angle={30} domain={[0, 'dataMax']} tick={false} axisLine={false}/>
-                    <Radar name="ความถี่พฤติกรรมเชิงบวก" dataKey="A" stroke="#14b8a6" fill="#14b8a6" fillOpacity={0.4} />
+                    <PolarRadiusAxis angle={30} domain={[0, radarDomainMax]} tick={false} axisLine={false}/>
+                    <Radar name="ความถี่พฤติกรรมเชิงบวก" dataKey="A" stroke="#14b8a6" fill="#14b8a6" fillOpacity={radarMaxPos === 0 ? 0 : 0.4} strokeOpacity={radarMaxPos === 0 ? 0 : 1} />
                     <Tooltip contentStyle={{borderRadius: '12px', border: 'none'}}/>
                   </RadarChart>
                 </ResponsiveContainer>
