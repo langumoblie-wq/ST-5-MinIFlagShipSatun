@@ -2720,7 +2720,7 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
                           </div>
                           <div className="flex items-center gap-2">
                             <button 
-                              onClick={() => setViewingSt5Result({ score: item.score, ...status })}
+                              onClick={() => setViewingSt5Result({ score: item.score, answers: item.answers, ...status })}
                               className="text-[10px] bg-white text-purple-600 px-2.5 py-1 border border-purple-200 rounded-full hover:bg-purple-50 transition font-bold shadow-sm"
                             >
                               ดูแนวทาง
