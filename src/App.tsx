@@ -2699,6 +2699,105 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
               </div>
             </div>
 
+            {/* รายละเอียดคำตอบรายข้อล่าสุดตามเกณฑ์ประเมินสำหรับแอดมิน */}
+            {(() => {
+              const uSt5 = [...st5Data.filter((d: any) => d.uid === selectedStudentForDetail.uid || d.userId === selectedStudentForDetail.uid)].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+              if (uSt5.length === 0) return null;
+              const latest = uSt5[0];
+              const status = calculateST5(latest.score);
+
+              return (
+                <div className="bg-slate-50 p-5 rounded-3xl border border-slate-100 space-y-4">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-purple-500 animate-pulse animate-duration-1000"></span>
+                      <h5 className="font-black text-sm text-slate-800">
+                        วิเคราะห์คำตอบรายข้อล่าสุด (ประเมินเมื่อ {new Date(latest.timestamp).toLocaleDateString('th-TH')})
+                      </h5>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-3 py-1 rounded-full text-xs font-black border shadow-sm ${status.color}`}>
+                        คะแนนรวม: {latest.score} แต้ม ({status.level})
+                      </span>
+                    </div>
+                  </div>
+
+                  {latest.answers && latest.answers.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* กลุ่มที่ไม่ผ่านเกณฑ์ (ความเสี่ยงสูง) */}
+                      <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100/50 space-y-3">
+                        <div className="flex items-center gap-2 text-rose-700 font-bold text-xs pb-1 border-b border-rose-100">
+                          <AlertCircle size={15} />
+                          <span>ไม่ผ่านเกณฑ์ (มีอาการบ่อยครั้ง - เป็นประจำ)</span>
+                          <span className="ml-auto bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full text-[10px] font-black">
+                            {st5Questions.filter((_, idx) => (latest.answers[idx] !== undefined ? latest.answers[idx] : 0) >= 2).length} ข้อ
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {st5Questions.map((q, idx) => {
+                            const val = latest.answers[idx] !== undefined ? latest.answers[idx] : 0;
+                            if (val < 2) return null;
+                            const optLabel = st5Options.find(o => o.value === val)?.label || `คะแนน ${val}`;
+                            return (
+                              <div key={idx} className="bg-white p-3 rounded-xl border border-rose-100 flex items-start gap-2 text-xs">
+                                <span className="w-5 h-5 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center font-black shrink-0 text-[10px]">{idx + 1}</span>
+                                <div className="space-y-0.5">
+                                  <p className="font-bold text-slate-700 leading-snug">{q}</p>
+                                  <p className="text-rose-600 font-semibold text-[10px]">ระดับอาการ: {optLabel}</p>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {st5Questions.filter((_, idx) => (latest.answers[idx] !== undefined ? latest.answers[idx] : 0) >= 2).length === 0 && (
+                            <p className="text-xs text-rose-400 italic text-center py-2">ไม่มีข้อที่ไม่ผ่านเกณฑ์ประเมิน</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* กลุ่มที่ผ่านเกณฑ์ (ปกติ) */}
+                      <div className="bg-teal-50/50 p-4 rounded-2xl border border-teal-100/50 space-y-3">
+                        <div className="flex items-center gap-2 text-teal-700 font-bold text-xs pb-1 border-b border-teal-100">
+                          <CheckCircle2 size={15} />
+                          <span>ผ่านเกณฑ์ (ปกติ - มีอาการบางครั้ง)</span>
+                          <span className="ml-auto bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full text-[10px] font-black">
+                            {st5Questions.filter((_, idx) => (latest.answers[idx] !== undefined ? latest.answers[idx] : 0) < 2).length} ข้อ
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {st5Questions.map((q, idx) => {
+                            const val = latest.answers[idx] !== undefined ? latest.answers[idx] : 0;
+                            if (val >= 2) return null;
+                            const optLabel = st5Options.find(o => o.value === val)?.label || `คะแนน ${val}`;
+                            return (
+                              <div key={idx} className="bg-white p-3 rounded-xl border border-teal-100 flex items-start gap-2 text-xs opacity-90">
+                                <span className="w-5 h-5 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center font-black shrink-0 text-[10px]">{idx + 1}</span>
+                                <div className="space-y-0.5">
+                                  <p className="font-bold text-slate-700 leading-snug">{q}</p>
+                                  <p className="text-teal-600 font-semibold text-[10px]">ระดับอาการ: {optLabel}</p>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {st5Questions.filter((_, idx) => (latest.answers[idx] !== undefined ? latest.answers[idx] : 0) < 2).length === 0 && (
+                            <p className="text-xs text-teal-400 italic text-center py-2">ไม่มีข้อที่ผ่านเกณฑ์ประเมิน</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-white rounded-2xl border border-slate-100 text-center">
+                      <p className="text-xs text-slate-500 font-medium">
+                        ข้อมูลนี้ถูกนำเข้าด้วยคะแนนรวมความเครียด <span className="font-black text-rose-600">{latest.score} แต้ม</span> (ไม่ได้ระบุรายละเอียดรายข้อในฐานข้อมูลหลัก)
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        ข้อแนะนำเบื้องต้น: สภาวะโดยทั่วไปเข้าเกณฑ์ความเสี่ยงวิกฤต ควรประสานส่งต่อตามนโยบายสุขภาพจิต
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Content body */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Column 1: ST-5 History */}
