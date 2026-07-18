@@ -2032,6 +2032,9 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
   const [selectedAffiliation, setSelectedAffiliation] = useState(profile.role === 'superadmin' ? 'all' : profile.affiliation);
   const [selectedUserFilter, setSelectedUserFilter] = useState('all');
   const [subTab, setSubTab] = useState('overview'); // overview, mental, behavior, policy
+  const [selectedStudentForDetail, setSelectedStudentForDetail] = useState(null);
+  const [viewingSt5Result, setViewingSt5Result] = useState(null);
+  const [viewingBehaviorResult, setViewingBehaviorResult] = useState(null);
 
   const baseStudents = users.filter(u => ['student', 'community', 'teacher'].includes(u.accountType) && (profile.role === 'superadmin' || u.affiliation === profile.affiliation));
 
@@ -2096,7 +2099,8 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
       totalBadBehaviors,
       totalGoodBehaviors,
       badCategories,
-      goodCategories
+      goodCategories,
+      affiliation: user.affiliation || 'ไม่ระบุสังกัด/สถานที่'
     };
   });
 
@@ -2442,21 +2446,77 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
            {/* High Risk Group List */}
            <div className="bg-rose-50 p-6 md:p-8 rounded-[2.5rem] border border-rose-100">
               <h3 className="font-black text-lg text-rose-700 flex items-center gap-2 mb-4"><ShieldAlert size={20}/> กลุ่มเสี่ยงสูง (High Risk Group - เฝ้าระวังพิเศษ)</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-60 overflow-y-auto custom-scrollbar pr-2">
-                {validForCorrelation.filter(d => ['High', 'Severe'].includes(d.riskGroup)).length === 0 ? (
-                  <p className="text-rose-400 text-sm font-medium">ไม่พบผู้ประเมินที่อยู่ในเกณฑ์ความเสี่ยงสูง</p>
-                ) : (
-                  validForCorrelation.filter(d => ['High', 'Severe'].includes(d.riskGroup)).map((u, idx) => (
-                    <div key={idx} className="bg-white p-4 rounded-2xl shadow-sm border border-rose-50 flex justify-between items-center">
-                      <div>
-                        <p className="font-bold text-slate-700">{u.name}</p>
-                        <p className="text-[11px] text-rose-500 font-medium">คะแนน ST-5: {u.st5Score} ({u.riskGroup})</p>
+              
+              {(() => {
+                const highRiskStudents = validForCorrelation.filter(d => ['High', 'Severe'].includes(d.riskGroup));
+                if (highRiskStudents.length === 0) {
+                  return <p className="text-rose-400 text-sm font-medium">ไม่พบผู้ประเมินที่อยู่ในเกณฑ์ความเสี่ยงสูง</p>;
+                }
+                
+                // จัดกลุ่มตามสังกัด/สถานที่
+                const grouped: Record<string, any[]> = highRiskStudents.reduce((acc: any, u) => {
+                  const aff = u.affiliation || 'ไม่ระบุสังกัด/สถานที่';
+                  if (!acc[aff]) acc[aff] = [];
+                  acc[aff].push(u);
+                  return acc;
+                }, {});
+
+                return (
+                  <div className="space-y-6 max-h-96 overflow-y-auto custom-scrollbar pr-2">
+                    {Object.entries(grouped).map(([affiliation, studentsList]) => (
+                      <div key={affiliation} className="space-y-3">
+                        {/* หัวข้อสังกัด */}
+                        <div className="flex items-center gap-2 pb-1 border-b border-rose-100">
+                          <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse"></span>
+                          <h4 className="font-bold text-sm text-rose-800 tracking-tight flex items-center gap-2">
+                            {affiliation}
+                            <span className="text-xs bg-rose-200/50 text-rose-700 px-2 py-0.5 rounded-full font-black">
+                              {studentsList.length} คน
+                            </span>
+                          </h4>
+                        </div>
+                        
+                        {/* รายการผู้เรียนกลุ่มเสี่ยงสูง */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {studentsList.map((u, idx) => (
+                            <div 
+                              key={idx} 
+                              onClick={() => setSelectedStudentForDetail(u)}
+                              className="bg-white p-4 rounded-2xl shadow-sm border border-rose-100 flex justify-between items-center hover:border-rose-300 hover:shadow-md cursor-pointer transition-all transform hover:-translate-y-0.5"
+                              title="คลิกเพื่อดูรายละเอียดการประเมิน"
+                            >
+                              <div>
+                                <p className="font-bold text-slate-700 text-sm">{u.name}</p>
+                                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                                    u.riskGroup === 'Severe' 
+                                      ? 'bg-rose-100 text-rose-700 border border-rose-200' 
+                                      : 'bg-amber-100 text-amber-700 border border-amber-200'
+                                  }`}>
+                                    ST-5: {u.st5Score} ({u.riskGroup === 'Severe' ? 'เครียดรุนแรง' : 'เครียดสูง'})
+                                  </span>
+                                  {u.totalBadBehaviors > 0 && (
+                                    <span className="text-[10px] font-bold bg-orange-50 text-orange-600 px-2 py-0.5 rounded-md border border-orange-100">
+                                      พฤติกรรมเสี่ยง: {u.totalBadBehaviors}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs ${
+                                u.riskGroup === 'Severe'
+                                  ? 'bg-rose-100 text-rose-600'
+                                  : 'bg-amber-100 text-amber-600'
+                              }`}>
+                                !
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <span className="w-8 h-8 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center font-black">!</span>
-                    </div>
-                  ))
-                )}
-              </div>
+                    ))}
+                  </div>
+                );
+              })()}
            </div>
         </div>
       )}
@@ -2609,6 +2669,126 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
             </div>
           </div>
         </div>
+      )}
+
+      {/* POPUP MODAL: รายละเอียดกลุ่มเฝ้าระวังพิเศษ (High Risk Student Detail) */}
+      {selectedStudentForDetail && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto text-left">
+          <div className="relative w-full max-w-4xl bg-white border-2 border-rose-100 p-6 md:p-8 rounded-[2.5rem] shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto custom-scrollbar animate-in zoom-in-95 duration-300">
+            {/* Close button */}
+            <button 
+              onClick={() => setSelectedStudentForDetail(null)} 
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-all"
+            >
+              <XCircle size={28} />
+            </button>
+
+            {/* Header */}
+            <div className="flex items-center gap-4 border-b pb-4">
+              <div className="w-14 h-14 bg-gradient-to-br from-rose-100 to-rose-200 text-rose-600 rounded-full flex items-center justify-center text-xl font-black shadow-inner border border-rose-200">
+                {selectedStudentForDetail.name.charAt(0)}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-black text-xl text-slate-800">{selectedStudentForDetail.name}</h4>
+                  <span className="text-[10px] font-bold bg-rose-100 text-rose-700 px-2.5 py-0.5 rounded-full border border-rose-200">กลุ่มเฝ้าระวังพิเศษ</span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1.5">
+                  ID: {selectedStudentForDetail.uid} • สังกัด: {selectedStudentForDetail.affiliation}
+                </p>
+              </div>
+            </div>
+
+            {/* Content body */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Column 1: ST-5 History */}
+              <div className="space-y-4">
+                <h5 className="font-black text-sm text-slate-700 flex items-center gap-2 border-b pb-2">
+                  <HeartPulse size={18} className="text-pink-500" /> ประวัติประเมินสุขภาพจิต (ST-5)
+                </h5>
+                <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
+                  {(() => {
+                    const uSt5 = [...st5Data.filter((d: any) => d.uid === selectedStudentForDetail.uid || d.userId === selectedStudentForDetail.uid)].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+                    if (uSt5.length === 0) return <p className="text-slate-400 text-xs py-4 text-center">ไม่พบข้อมูลประเมินสุขภาพจิต</p>;
+                    return uSt5.map((item: any, idx: number) => {
+                      const status = calculateST5(item.score);
+                      return (
+                        <div key={item.id} className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 flex justify-between items-center gap-3">
+                          <div>
+                            <p className="text-xs font-bold text-slate-600">ครั้งที่ {uSt5.length - idx}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5">{new Date(item.timestamp).toLocaleDateString('th-TH')}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button 
+                              onClick={() => setViewingSt5Result({ score: item.score, ...status })}
+                              className="text-[10px] bg-white text-purple-600 px-2.5 py-1 border border-purple-200 rounded-full hover:bg-purple-50 transition font-bold shadow-sm"
+                            >
+                              ดูแนวทาง
+                            </button>
+                            <span className={`px-3 py-1 rounded-full text-[10px] font-bold border shadow-sm ${status.color}`}>
+                              {status.level} ({item.score} แต้ม)
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+
+              {/* Column 2: Behavior History */}
+              <div className="space-y-4">
+                <h5 className="font-black text-sm text-slate-700 flex items-center gap-2 border-b pb-2">
+                  <ClipboardList size={18} className="text-teal-500" /> ประวัติพฤติกรรม (Behavioral Log)
+                </h5>
+                <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
+                  {(() => {
+                    const uBeh = [...behaviorData.filter((d: any) => d.targetUid === selectedStudentForDetail.uid)].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+                    if (uBeh.length === 0) return <p className="text-slate-400 text-xs py-4 text-center">ไม่พบข้อมูลประวัติพฤติกรรม</p>;
+                    return uBeh.map((item: any, idx: number) => (
+                      <div key={item.id || idx} className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 flex justify-between items-center gap-3">
+                        <div>
+                          <p className="text-xs font-bold text-slate-600">ประเมินเมื่อ {new Date(item.timestamp).toLocaleDateString('th-TH')}</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5">โดยครู/ผู้รับผิดชอบ</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={() => setViewingBehaviorResult(item.selections)}
+                            className="text-[10px] bg-white text-teal-600 px-2.5 py-1 border border-teal-200 rounded-full hover:bg-teal-50 transition font-bold shadow-sm"
+                          >
+                            ดูข้อเสนอแนะ
+                          </button>
+                          <div className="flex gap-1">
+                            {item.selections?.undesirable?.length > 0 && (
+                              <span className="bg-rose-50 border border-rose-100 text-rose-700 font-bold text-[9px] px-1.5 py-0.5 rounded">
+                                เสี่ยง {item.selections.undesirable.length}
+                              </span>
+                            )}
+                            {item.selections?.desirable?.length > 0 && (
+                              <span className="bg-teal-50 border border-teal-100 text-teal-700 font-bold text-[9px] px-1.5 py-0.5 rounded">
+                                บวก {item.selections.desirable.length}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ST-5 nested modal overlay */}
+      {viewingSt5Result && (
+        <ST5ResultModal result={viewingSt5Result} isTeacherView={true} onSummaryClose={() => setViewingSt5Result(null)} />
+      )}
+
+      {/* Behavior nested modal overlay */}
+      {viewingBehaviorResult && (
+        <BehaviorResultSummary selections={viewingBehaviorResult} onSummaryClose={() => setViewingBehaviorResult(null)} />
       )}
     </div>
   );
