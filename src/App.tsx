@@ -3,7 +3,7 @@ import { toPng } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 
 import { 
-  Users, ShieldCheck, Activity, BarChart3, Plus, 
+  Users, ShieldCheck, Activity, BarChart3, Plus, Shield,
   CheckCircle2, XCircle, Clock, ChevronRight, LogOut, FileText,
   PieChart, TrendingUp, AlertCircle, Network, BookOpen,
   HeartPulse, Smile, Sparkles, ClipboardList, LayoutDashboard, UserSquare2, Star,
@@ -1691,55 +1691,77 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
 
       <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
         <h3 className="font-black text-xl mb-6 text-slate-800">จัดการผู้ใช้งานทั้งหมดในระบบ</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm min-w-[800px]">
-            <thead>
-              <tr className="border-b-2 border-slate-100">
-                <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs">ผู้ใช้</th>
-                <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs">สังกัด</th>
-                <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs text-center">สถานะ</th>
-                <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs text-right">จัดการข้อมูล (Admin / User)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {displayUsers.map(u => (
-                <tr key={u.id} className="border-b border-slate-50 hover:bg-slate-50 transition">
-                  <td className="p-4">
-                    <p className="font-bold text-slate-700">{u.name}</p>
-                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">@{u.id}</p>
-                    <span className="text-[10px] font-bold text-purple-500 bg-purple-50 px-2 py-0.5 rounded-md mt-1 inline-block">
-                      {u.accountType === 'student' ? 'นักเรียน' : u.accountType === 'teacher' ? 'ครู' : u.accountType === 'community' ? 'ชุมชน' : u.accountType === 'admin' ? 'Admin' : 'Superadmin'}
-                    </span>
-                  </td>
-                  <td className="p-4 text-xs text-slate-500 font-medium">{displayAffiliation(u.affiliation) || '-'}</td>
-                  <td className="p-4 text-center">
-                     <span className={`px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide border ${
-                        u.status === 'approved' ? 'bg-teal-50 text-teal-600 border-teal-100' : 
-                        u.status === 'suspended' ? 'bg-rose-50 text-rose-600 border-rose-100' : 
-                        'bg-orange-50 text-orange-600 border-orange-100'
-                     }`}>
-                      {u.status === 'approved' ? 'อนุมัติแล้ว' : u.status === 'suspended' ? 'ระงับสิทธิ์' : 'รอตรวจสอบ'}
-                    </span>
-                  </td>
-                  <td className="p-4 text-right">
-                    {(u.role === 'user' || u.role === 'admin') ? (
-                      <div className="flex items-center justify-end gap-2">
-                        <button onClick={() => triggerDownloadConsentPdf(u)} className="text-purple-500 hover:bg-purple-50 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1">
-                           <Download size={12}/> PDF
-                        </button>
-                        <button onClick={() => toggleStatus(u.id, u.status, u.name)} className={`${u.status === 'suspended' ? 'text-emerald-500 hover:bg-emerald-50' : 'text-amber-500 hover:bg-amber-50'} px-3 py-1.5 rounded-lg text-xs font-bold transition`}>
-                          {u.status === 'suspended' ? 'ปลดระงับ' : 'ระงับ'}
-                        </button>
-                        <button onClick={() => setEditingUser(u)} className="text-sky-500 hover:bg-sky-50 px-3 py-1.5 rounded-lg text-xs font-bold transition">แก้ไข</button>
-                        <button onClick={() => deleteUser(u.id, u.name)} className="text-rose-400 hover:text-white hover:bg-rose-500 px-3 py-1.5 rounded-lg text-xs font-bold transition">ลบ</button>
-                      </div>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        
+        {['superadmin', 'admin', 'user'].map(roleGroup => {
+          const roleUsers = displayUsers.filter(u => u.role === roleGroup);
+          if (roleUsers.length === 0) return null;
+
+          return (
+            <div key={roleGroup} className="mb-10 last:mb-0">
+              <h4 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-700 border-b pb-2">
+                {roleGroup === 'superadmin' && <span className="bg-amber-100 text-amber-600 p-1.5 rounded-lg"><Star size={18} /></span>}
+                {roleGroup === 'admin' && <span className="bg-sky-100 text-sky-600 p-1.5 rounded-lg"><Shield size={18} /></span>}
+                {roleGroup === 'user' && <span className="bg-teal-100 text-teal-600 p-1.5 rounded-lg"><Users size={18} /></span>}
+                {roleGroup === 'superadmin' ? 'Superadmin (ผู้ดูแลระบบสูงสุด)' : roleGroup === 'admin' ? 'Admin (ผู้ดูแลระดับโรงเรียน)' : 'User (ผู้ใช้งานทั่วไป)'}
+                <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2.5 py-0.5 rounded-full ml-2">{roleUsers.length}</span>
+              </h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm min-w-[800px]">
+                  <thead>
+                    <tr className="border-b-2 border-slate-100 bg-slate-50/50">
+                      <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs rounded-tl-xl">ผู้ใช้</th>
+                      <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs">สังกัด</th>
+                      <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs text-center">สถานะ</th>
+                      <th className="p-4 font-bold text-slate-400 uppercase tracking-wider text-xs text-right rounded-tr-xl">จัดการข้อมูล</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {roleUsers.map(u => (
+                      <tr key={u.id} className="border-b border-slate-50 hover:bg-slate-50 transition">
+                        <td className="p-4">
+                          <p className="font-bold text-slate-700">{u.name}</p>
+                          <p className="text-[10px] text-slate-400 font-mono mt-0.5">@{u.id}</p>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md mt-1 inline-block ${
+                            u.accountType === 'student' ? 'bg-indigo-50 text-indigo-500' :
+                            u.accountType === 'teacher' ? 'bg-fuchsia-50 text-fuchsia-500' :
+                            u.accountType === 'community' ? 'bg-emerald-50 text-emerald-500' :
+                            'bg-slate-100 text-slate-500'
+                          }`}>
+                            {u.accountType === 'student' ? 'นักเรียน' : u.accountType === 'teacher' ? 'ครู' : u.accountType === 'community' ? 'ชุมชน' : u.accountType === 'admin' ? 'Admin' : 'Superadmin'}
+                          </span>
+                        </td>
+                        <td className="p-4 text-xs text-slate-500 font-medium">{displayAffiliation(u.affiliation) || '-'}</td>
+                        <td className="p-4 text-center">
+                           <span className={`px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide border ${
+                              u.status === 'approved' ? 'bg-teal-50 text-teal-600 border-teal-100' : 
+                              u.status === 'suspended' ? 'bg-rose-50 text-rose-600 border-rose-100' : 
+                              'bg-orange-50 text-orange-600 border-orange-100'
+                           }`}>
+                            {u.status === 'approved' ? 'อนุมัติแล้ว' : u.status === 'suspended' ? 'ระงับสิทธิ์' : 'รอตรวจสอบ'}
+                          </span>
+                        </td>
+                        <td className="p-4 text-right">
+                          {(u.role === 'user' || u.role === 'admin') ? (
+                            <div className="flex items-center justify-end gap-2">
+                              <button onClick={() => triggerDownloadConsentPdf(u)} className="text-purple-500 hover:bg-purple-50 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1">
+                                 <Download size={12}/> PDF
+                              </button>
+                              <button onClick={() => toggleStatus(u.id, u.status, u.name)} className={`${u.status === 'suspended' ? 'text-emerald-500 hover:bg-emerald-50' : 'text-amber-500 hover:bg-amber-50'} px-3 py-1.5 rounded-lg text-xs font-bold transition`}>
+                                {u.status === 'suspended' ? 'ปลดระงับ' : 'ระงับ'}
+                              </button>
+                              <button onClick={() => setEditingUser(u)} className="text-sky-500 hover:bg-sky-50 px-3 py-1.5 rounded-lg text-xs font-bold transition">แก้ไข</button>
+                              <button onClick={() => deleteUser(u.id, u.name)} className="text-rose-400 hover:text-white hover:bg-rose-500 px-3 py-1.5 rounded-lg text-xs font-bold transition">ลบ</button>
+                            </div>
+                          ) : <span className="text-xs text-slate-300 italic">ไม่สามารถแก้ไขได้</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
