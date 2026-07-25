@@ -3324,7 +3324,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                                                                               <div className="flex flex-wrap gap-1">
                                                                                   {student.visits.map((v, idx) => (
                                                                                       <span key={idx} className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[9px] font-medium border border-slate-200">
-                                                                                          ครั้งที่ {idx + 1}
+                                                                                          ครั้งที่ {idx + 1} ({new Date(v.timestamp).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: '2-digit' })})
                                                                                       </span>
                                                                                   ))}
                                                                               </div>
