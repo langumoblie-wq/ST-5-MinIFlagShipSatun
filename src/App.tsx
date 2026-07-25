@@ -3048,7 +3048,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
   const handlePrint = async () => {
     setIsPrinting(true);
     setTimeout(async () => {
-        const element = document.getElementById('report-dashboard-container');
+        const element = document.getElementById('pdf-print-container');
         if (!element) {
             setIsPrinting(false);
             return;
@@ -3065,7 +3065,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                     return true;
                 }
             });
-            const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+            const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
             const imgProps = pdf.getImageProperties(dataUrl);
             const pdfWidth = pdf.internal.pageSize.getWidth();
             const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
@@ -3207,14 +3207,13 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                               <React.Fragment key={affil}>
                                   <tr className="hover:bg-slate-50/30 transition-colors group flex flex-col md:table-row">
                                       <td className="p-4 md:p-5">
-                                          <button onClick={() => toggleRow(affil)} className="flex items-center gap-2 text-sm font-black text-slate-800 no-print w-full text-left">
-                                              {isExpanded ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                                          <button onClick={() => toggleRow(affil)} className="flex items-center gap-2 text-sm font-black text-slate-800 w-full text-left">
+                                              <span className="no-print">
+                                                  {isExpanded ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                                              </span>
                                               {affil} 
-                                              <span className="text-[9px] text-blue-500 font-medium bg-blue-50 px-2 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity ml-2 hidden md:inline-block">(คลิกดูรายละเอียด)</span>
+                                              <span className="no-print text-[9px] text-blue-500 font-medium bg-blue-50 px-2 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity ml-2 hidden md:inline-block">(คลิกดูรายละเอียด)</span>
                                           </button>
-                                          <div className="print-only font-black text-slate-800 text-sm hidden">
-                                              {affil}
-                                          </div>
                                       </td>
                                       <td className="p-4 md:p-5 md:table-cell flex justify-between items-center bg-slate-50/50 md:bg-transparent">
                                           <span className="md:hidden text-[10px] font-bold text-slate-500">โมเดล / อำเภอ</span>
@@ -3266,7 +3265,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                                       </td>
                                   </tr>
                                   
-                                  {(isExpanded || window.matchMedia("print").matches) && (
+                                  {(isExpanded || isPrinting) && (
                                       <tr className="bg-slate-50/30 print-row-expanded border-t border-slate-100">
                                           <td colSpan={6} className="p-4 md:p-8 border-b border-slate-100">
                                               
@@ -3355,10 +3354,69 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
               </table>
           </div>
       </div>
+
+      {/* Hidden Printable Container for PDF */}
+      <div className="absolute top-[-9999px] left-[-9999px]">
+        <div id="pdf-print-container" className="bg-white p-12 w-[1122px]" style={{ fontFamily: "Kanit, sans-serif" }}>
+            <h1 className="text-xl font-bold text-center mb-6 text-black">สรุปผลและการติดตามความก้าวหน้าโครงการ Mental Care คัดกรองจิต & ประเมินพฤติกรรม</h1>
+            
+            <table className="w-full border-collapse border border-black text-sm text-black mb-4">
+                <thead>
+                    <tr>
+                        <th rowSpan={2} className="border border-black p-2 text-center bg-gray-50 align-middle">พื้นที่เป้าหมาย (AREA)</th>
+                        <th rowSpan={2} className="border border-black p-2 text-center bg-gray-50 align-middle">โมเดล / อำเภอ</th>
+                        <th rowSpan={2} className="border border-black p-2 text-center bg-gray-50 align-middle">เป้าหมาย(คน)</th>
+                        <th colSpan={Math.max(...(selectedAffiliation === 'all' ? affiliations : [selectedAffiliation]).map(a => Math.max(...Object.keys(getStats(a).visitsBreakdown).map(Number), 0)), 1) * 2} className="border border-black p-2 text-center bg-gray-50">
+                            จำนวนที่ได้รับการคัดกรอง(คน)
+                        </th>
+                    </tr>
+                    <tr>
+                        {Array.from({ length: Math.max(...(selectedAffiliation === 'all' ? affiliations : [selectedAffiliation]).map(a => Math.max(...Object.keys(getStats(a).visitsBreakdown).map(Number), 0)), 1) }).map((_, i) => (
+                            <React.Fragment key={i}>
+                                <th className="border border-black p-2 text-center bg-gray-50">ครั้งที่ {i + 1}</th>
+                                <th className="border border-black p-2 text-center bg-gray-50">ร้อยละ</th>
+                            </React.Fragment>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {(selectedAffiliation === 'all' ? affiliations : [selectedAffiliation]).map(affil => {
+                        const stats = getStats(affil);
+                        const maxVisitsOverall = Math.max(...(selectedAffiliation === 'all' ? affiliations : [selectedAffiliation]).map(a => Math.max(...Object.keys(getStats(a).visitsBreakdown).map(Number), 0)), 1);
+                        return (
+                            <tr key={affil}>
+                                <td className="border border-black p-2">{affil}</td>
+                                <td className="border border-black p-2 text-center">ตำบล</td>
+                                <td className="border border-black p-2 text-center">{stats.target}</td>
+                                {Array.from({ length: maxVisitsOverall }).map((_, i) => {
+                                    const visitNum = i + 1;
+                                    const count = stats.visitsBreakdown[visitNum] || 0;
+                                    const percent = stats.target > 0 ? ((count / stats.target) * 100).toFixed(1) : '0.0';
+                                    return (
+                                        <React.Fragment key={visitNum}>
+                                            <td className="border border-black p-2 text-center">{count > 0 ? count : ''}</td>
+                                            <td className="border border-black p-2 text-center">{count > 0 ? percent : ''}</td>
+                                        </React.Fragment>
+                                    );
+                                })}
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+            
+            <div className="mt-4 text-left text-sm italic text-slate-800 font-bold">
+                หมายเหตุ ครั้งที่ เพิ่มตามจำนวน ที่พบการคัดกรอง
+            </div>
+            <div className="mt-1 text-right text-sm italic text-slate-800 font-bold">
+                ภายใต้กิจกรรม MiniFlagShip Saun
+            </div>
+        </div>
+      </div>
+
     </div>
   );
-}
-function ST5Form({ onSubmit, onCancel, initialData }) {
+}function ST5Form({ onSubmit, onCancel, initialData }) {
   const [answers, setAnswers] = useState(initialData?.answers || Array(5).fill(null));
   const isComplete = answers.every(a => a !== null);
   const totalScore = answers.reduce((a, b) => a + (b || 0), 0);
