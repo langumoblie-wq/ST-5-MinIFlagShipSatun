@@ -1438,6 +1438,8 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
 }
 
 function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, triggerAlert, triggerConfirm, triggerDownloadConsentPdf }) {
+  const [showSt5Form, setShowSt5Form] = useState(false);
+  const [editingSt5, setEditingSt5] = useState(null);
   const [showBehaviorForm, setShowBehaviorForm] = useState(false);
   const [editingBehavior, setEditingBehavior] = useState(null);
   const [viewingSt5Result, setViewingSt5Result] = useState(null); 
@@ -1463,6 +1465,14 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
   const saveSuggestion = async (docId, text) => {
     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', docId), { suggestion: text });
     triggerAlert('บันทึกคำแนะนำความห่วงใยเรียบร้อยแล้วค่ะ ✦', 'success');
+  };
+
+  const deleteSt5 = (st5Id, timestamp) => {
+    triggerConfirm('ยืนยันการลบประวัติคัดกรอง ST-5 นี้ออกจากระบบ?', async () => {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', st5Id));
+      syncToGoogleSheet('DELETE_ST5', { targetName: student.name, timestamp: timestamp });
+      triggerAlert('ลบประวัติ ST-5 เรียบร้อยแล้วค่ะ', 'success');
+    }, 'danger');
   };
 
   const deleteBehavior = (behId, timestamp) => {
@@ -1534,6 +1544,27 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
         <BehaviorResultSummary selections={viewingBehaviorResult} onSummaryClose={() => setViewingBehaviorResult(null)} />
       )}
 
+      {showSt5Form && (
+        <ST5Form
+          initialData={editingSt5}
+          onCancel={() => { setShowSt5Form(false); setEditingSt5(null); }}
+          onSubmit={async (answers, totalScore) => {
+            const updatedSt5 = {
+                answers,
+                score: totalScore,
+                level: calculateST5(totalScore).level,
+            };
+            if (editingSt5) {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', editingSt5.id), updatedSt5);
+                syncToGoogleSheet('EDIT_ST5', { targetName: student.name, timestamp: editingSt5.timestamp, ...updatedSt5 });
+                triggerAlert('อัปเดตผลประเมิน ST-5 เรียบร้อย', 'success');
+            }
+            setShowSt5Form(false);
+            setEditingSt5(null);
+          }}
+        />
+      )}
+
       {showBehaviorForm && (
         <BehaviorForm 
           targetUser={student} 
@@ -1563,11 +1594,17 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
                       {new Date(item.timestamp).toLocaleDateString('th-TH')}
                     </span>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => setViewingSt5Result({ score: item.score, ...status })} className="text-xs bg-white text-purple-600 px-3 py-1 border border-purple-200 rounded-full hover:bg-purple-50 transition font-bold shadow-sm">
-                        ดูแนวทางวิชาการ
+                      <button onClick={() => setViewingSt5Result({ score: item.score, ...status })} className="text-[11px] bg-white text-purple-600 px-3 py-1.5 border border-purple-200 rounded-full hover:bg-purple-50 transition font-bold shadow-sm">
+                        แนวทางวิชาการ
                       </button>
-                      <span className={`px-4 py-1.5 rounded-full text-xs font-bold border shadow-sm ${status.color}`}>
-                        {item.level || status.level} ({item.score} แต้ม)
+                      <button onClick={() => { setEditingSt5(item); setShowSt5Form(true); }} className="text-[11px] bg-sky-50 text-sky-600 px-3 py-1.5 border border-sky-200 rounded-full hover:bg-sky-100 transition font-bold shadow-sm">
+                        แก้ไข
+                      </button>
+                      <button onClick={() => deleteSt5(item.id, item.timestamp)} className="text-[11px] bg-rose-50 text-rose-600 px-3 py-1.5 border border-rose-200 rounded-full hover:bg-rose-100 transition font-bold shadow-sm">
+                        ลบ
+                      </button>
+                      <span className={`px-3 py-1.5 rounded-full text-[11px] font-bold border shadow-sm ${status.color}`}>
+                        {item.level || status.level} ({item.score})
                       </span>
                     </div>
                   </div>
@@ -2985,46 +3022,90 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
       studentsInAffil = studentsInAffil.filter(u => u.affiliation === affil);
     }
     
-    const userVisits: Record<string, any[]> = {};
+    // ST-5 Data Processing
+    const st5UserVisits: Record<string, any[]> = {};
     const st5InAffil = st5Data.filter(d => studentsInAffil.some(u => u.id === (d.uid || d.userId)));
-    
     st5InAffil.forEach(d => {
       const id = d.uid || d.userId;
-      if (!userVisits[id]) userVisits[id] = [];
-      userVisits[id].push(d);
+      if (!st5UserVisits[id]) st5UserVisits[id] = [];
+      st5UserVisits[id].push(d);
     });
 
-    const uniqueScreenedCount = Object.keys(userVisits).length;
-    const totalVisitsCount = st5InAffil.length;
-    
-    const visitsBreakdown = {};
-    Object.values(userVisits).forEach(visits => {
+    const st5UniqueScreenedCount = Object.keys(st5UserVisits).length;
+    const st5TotalVisitsCount = st5InAffil.length;
+    const st5VisitsBreakdown = {};
+    Object.values(st5UserVisits).forEach(visits => {
         const count = visits.length;
         for (let i = 1; i <= count; i++) {
-            if (!visitsBreakdown[i]) visitsBreakdown[i] = 0;
-            visitsBreakdown[i]++;
+            if (!st5VisitsBreakdown[i]) st5VisitsBreakdown[i] = 0;
+            st5VisitsBreakdown[i]++;
         }
     });
-
-    const repeatScreenedStudents = studentsInAffil
-        .filter(u => (userVisits[u.id]?.length || 0) > 1)
+    const st5RepeatScreenedStudents = studentsInAffil
+        .filter(u => (st5UserVisits[u.id]?.length || 0) > 1)
         .map(u => ({
             ...u,
-            times: userVisits[u.id].length,
-            visits: userVisits[u.id].sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+            times: st5UserVisits[u.id].length,
+            visits: st5UserVisits[u.id].sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
         }))
         .sort((a, b) => b.times - a.times);
 
-    const target = affil === 'all' ? globalTarget : (targets[affil] || 100);
-    const progressPercent = target > 0 ? ((uniqueScreenedCount / target) * 100).toFixed(1) : 0;
+    // Behavior Data Processing
+    const behaviorUserVisits: Record<string, any[]> = {};
+    const behaviorInAffil = behaviorData.filter(d => studentsInAffil.some(u => u.id === (d.uid || d.userId)));
+    behaviorInAffil.forEach(d => {
+      const id = d.uid || d.userId;
+      if (!behaviorUserVisits[id]) behaviorUserVisits[id] = [];
+      behaviorUserVisits[id].push(d);
+    });
 
+    const behaviorUniqueScreenedCount = Object.keys(behaviorUserVisits).length;
+    const behaviorTotalVisitsCount = behaviorInAffil.length;
+    const behaviorVisitsBreakdown = {};
+    Object.values(behaviorUserVisits).forEach(visits => {
+        const count = visits.length;
+        for (let i = 1; i <= count; i++) {
+            if (!behaviorVisitsBreakdown[i]) behaviorVisitsBreakdown[i] = 0;
+            behaviorVisitsBreakdown[i]++;
+        }
+    });
+    const behaviorRepeatScreenedStudents = studentsInAffil
+        .filter(u => (behaviorUserVisits[u.id]?.length || 0) > 1)
+        .map(u => ({
+            ...u,
+            times: behaviorUserVisits[u.id].length,
+            visits: behaviorUserVisits[u.id].sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+        }))
+        .sort((a, b) => b.times - a.times);
+
+    // Backward compatibility for table (we could use st5 unique count as total unique)
+    const target = affil === 'all' ? globalTarget : (targets[affil] || 100);
+    const progressPercent = target > 0 ? ((st5UniqueScreenedCount / target) * 100).toFixed(1) : 0;
+
+    // We will keep visitsBreakdown mapped to st5VisitsBreakdown to not break the PDF code temporarily,
+    // although PDF may also need an update if they want to see behavior data. 
+    // Wait, the PDF already uses visitsBreakdown for ST-5.
+    
     return {
-        uniqueScreenedCount,
-        totalVisitsCount,
+        uniqueScreenedCount: st5UniqueScreenedCount,
+        totalVisitsCount: st5TotalVisitsCount,
         target,
         progressPercent,
-        visitsBreakdown,
-        repeatScreenedStudents
+        visitsBreakdown: st5VisitsBreakdown,
+        repeatScreenedStudents: st5RepeatScreenedStudents,
+        
+        st5: {
+            uniqueCount: st5UniqueScreenedCount,
+            totalCount: st5TotalVisitsCount,
+            breakdown: st5VisitsBreakdown,
+            repeatStudents: st5RepeatScreenedStudents
+        },
+        behavior: {
+            uniqueCount: behaviorUniqueScreenedCount,
+            totalCount: behaviorTotalVisitsCount,
+            breakdown: behaviorVisitsBreakdown,
+            repeatStudents: behaviorRepeatScreenedStudents
+        }
     };
   };
 
@@ -3271,40 +3352,60 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                                               
                                               <div className="mb-8">
                                                   <h5 className="flex items-center gap-2 text-[13px] font-black text-slate-700 mb-4">
-                                                      <Activity size={16} className="text-blue-500" /> แยกตามรายการครั้งที่ (Visits Breakdown)
+                                                      <Activity size={16} className="text-blue-500" /> แยกตามรายการครั้งที่ (Visits Breakdown) - ประเมินสุขภาพจิต (ST-5)
                                                   </h5>
-                                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                      {Object.keys(stats.visitsBreakdown).sort((a,b)=>Number(a)-Number(b)).map(visitNum => {
-                                                          const count = stats.visitsBreakdown[visitNum];
+                                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                                      {Object.keys(stats.st5.breakdown).sort((a,b)=>Number(a)-Number(b)).map(visitNum => {
+                                                          const count = stats.st5.breakdown[visitNum];
                                                           const pct = stats.target > 0 ? ((count / stats.target) * 100).toFixed(1) : 0;
                                                           return (
                                                               <div key={visitNum} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                                                                   <div className="flex justify-between items-center mb-3 border-b border-slate-50 pb-2">
                                                                       <span className="font-bold text-[13px] text-slate-700">ครั้งที่ {visitNum}</span>
-                                                                      <span className="text-[13px] font-black text-blue-700">{count} คน</span>
+                                                                      <span className="font-black text-blue-600 text-sm">{count} คน <span className="text-[10px] text-slate-400 font-medium ml-1">({pct}%)</span></span>
                                                                   </div>
-                                                                  <div className="flex justify-between items-end mb-1.5">
-                                                                      <span className="text-[10px] text-slate-500 font-medium">ความก้าวหน้า ({count}/{stats.target})</span>
-                                                                      <span className="text-[11px] font-black text-blue-600">{pct}%</span>
+                                                                  <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                                                                      <div className="bg-blue-500 h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, Number(pct))}%` }}></div>
                                                                   </div>
-                                                                  <div className="w-full bg-indigo-100/50 h-1.5 rounded-full overflow-hidden">
+                                                              </div>
+                                                          )
+                                                      })}
+                                                      {Object.keys(stats.st5.breakdown).length === 0 && (
+                                                          <div className="col-span-full text-sm text-slate-400 italic bg-white p-4 rounded-xl border border-slate-200 shadow-sm">ไม่มีข้อมูลการคัดกรอง ST-5</div>
+                                                      )}
+                                                  </div>
+                                                  
+                                                  <h5 className="flex items-center gap-2 text-[13px] font-black text-slate-700 mb-4 mt-6">
+                                                      <Activity size={16} className="text-indigo-500" /> แยกตามรายการครั้งที่ (Visits Breakdown) - ประเมินพฤติกรรม
+                                                  </h5>
+                                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                      {Object.keys(stats.behavior.breakdown).sort((a,b)=>Number(a)-Number(b)).map(visitNum => {
+                                                          const count = stats.behavior.breakdown[visitNum];
+                                                          const pct = stats.target > 0 ? ((count / stats.target) * 100).toFixed(1) : 0;
+                                                          return (
+                                                              <div key={visitNum} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                                                                  <div className="flex justify-between items-center mb-3 border-b border-slate-50 pb-2">
+                                                                      <span className="font-bold text-[13px] text-slate-700">ครั้งที่ {visitNum}</span>
+                                                                      <span className="font-black text-indigo-600 text-sm">{count} คน <span className="text-[10px] text-slate-400 font-medium ml-1">({pct}%)</span></span>
+                                                                  </div>
+                                                                  <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
                                                                       <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, Number(pct))}%` }}></div>
                                                                   </div>
                                                               </div>
                                                           )
                                                       })}
-                                                      {Object.keys(stats.visitsBreakdown).length === 0 && (
-                                                          <div className="col-span-full text-sm text-slate-400 italic bg-white p-4 rounded-xl border border-slate-200 shadow-sm">ไม่มีข้อมูลการคัดกรอง</div>
+                                                      {Object.keys(stats.behavior.breakdown).length === 0 && (
+                                                          <div className="col-span-full text-sm text-slate-400 italic bg-white p-4 rounded-xl border border-slate-200 shadow-sm">ไม่มีข้อมูลการประเมินพฤติกรรม</div>
                                                       )}
                                                   </div>
                                               </div>
 
                                               <div>
                                                   <h5 className="flex items-center gap-2 text-[13px] font-black text-slate-700 mb-4">
-                                                      <Users size={16} className="text-orange-500" /> รายการซ้ำ / รับบริการหลายครั้ง ({stats.repeatScreenedStudents.length} รายการ)
+                                                      <Users size={16} className="text-orange-500" /> รายการซ้ำ / รับบริการหลายครั้ง - ประเมินสุขภาพจิต (ST-5) ({stats.st5.repeatStudents.length} รายการ)
                                                   </h5>
-                                                  {stats.repeatScreenedStudents.length > 0 ? (
-                                                      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                                                  {stats.st5.repeatStudents.length > 0 ? (
+                                                      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm mb-6">
                                                           <table className="w-full text-left text-sm">
                                                               <thead className="bg-slate-50 border-b border-slate-100">
                                                                   <tr>
@@ -3314,7 +3415,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                                                                   </tr>
                                                               </thead>
                                                               <tbody className="divide-y divide-slate-50">
-                                                                  {stats.repeatScreenedStudents.map((student) => (
+                                                                  {stats.st5.repeatStudents.map((student) => (
                                                                       <tr key={student.id} className="hover:bg-slate-50/50">
                                                                           <td className="p-3 font-bold text-slate-700 text-xs">{student.name}</td>
                                                                           <td className="p-3 text-center">
@@ -3335,7 +3436,45 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                                                           </table>
                                                       </div>
                                                   ) : (
-                                                      <div className="text-[13px] text-slate-400 italic bg-white p-4 rounded-xl border border-slate-200 shadow-sm">ไม่พบผู้รับบริการหลายครั้ง</div>
+                                                      <div className="text-[13px] text-slate-400 italic bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">ไม่พบผู้รับบริการหลายครั้ง ST-5</div>
+                                                  )}
+                                                  
+                                                  <h5 className="flex items-center gap-2 text-[13px] font-black text-slate-700 mb-4 mt-6">
+                                                      <Users size={16} className="text-rose-500" /> รายการซ้ำ / รับบริการหลายครั้ง - ประเมินพฤติกรรม ({stats.behavior.repeatStudents.length} รายการ)
+                                                  </h5>
+                                                  {stats.behavior.repeatStudents.length > 0 ? (
+                                                      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                                                          <table className="w-full text-left text-sm">
+                                                              <thead className="bg-slate-50 border-b border-slate-100">
+                                                                  <tr>
+                                                                      <th className="p-3 font-bold text-slate-500 text-[11px] uppercase tracking-wider">ชื่อ-สกุล</th>
+                                                                      <th className="p-3 font-bold text-slate-500 text-[11px] uppercase tracking-wider text-center w-24 md:w-32">จำนวนครั้ง</th>
+                                                                      <th className="p-3 font-bold text-slate-500 text-[11px] uppercase tracking-wider hidden md:table-cell">รายการครั้งที่ (Visits)</th>
+                                                                  </tr>
+                                                              </thead>
+                                                              <tbody className="divide-y divide-slate-50">
+                                                                  {stats.behavior.repeatStudents.map((student) => (
+                                                                      <tr key={student.id} className="hover:bg-slate-50/50">
+                                                                          <td className="p-3 font-bold text-slate-700 text-xs">{student.name}</td>
+                                                                          <td className="p-3 text-center">
+                                                                              <span className="font-black text-rose-600 text-[13px]">{student.times}</span>
+                                                                          </td>
+                                                                          <td className="p-3 hidden md:table-cell">
+                                                                              <div className="flex flex-wrap gap-1">
+                                                                                  {student.visits.map((v, idx) => (
+                                                                                      <span key={idx} className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[9px] font-medium border border-slate-200">
+                                                                                          ครั้งที่ {idx + 1} ({new Date(v.timestamp).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: '2-digit' })})
+                                                                                      </span>
+                                                                                  ))}
+                                                                              </div>
+                                                                          </td>
+                                                                      </tr>
+                                                                  ))}
+                                                              </tbody>
+                                                          </table>
+                                                      </div>
+                                                  ) : (
+                                                      <div className="text-[13px] text-slate-400 italic bg-white p-4 rounded-xl border border-slate-200 shadow-sm">ไม่พบผู้รับบริการหลายครั้ง พฤติกรรม</div>
                                                   )}
                                               </div>
 
@@ -3416,7 +3555,10 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
 
     </div>
   );
-}function ST5Form({ onSubmit, onCancel, initialData }) {
+}
+
+function ST5Form({ onSubmit, onCancel, initialData }) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [answers, setAnswers] = useState(initialData?.answers || Array(5).fill(null));
   const isComplete = answers.every(a => a !== null);
   const totalScore = answers.reduce((a, b) => a + (b || 0), 0);
@@ -3451,7 +3593,14 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
 
       <div className="mt-10 flex flex-col-reverse md:flex-row gap-4 pt-8 border-t border-slate-100">
         <button onClick={onCancel} className="flex-1 py-4 bg-slate-100 rounded-2xl text-slate-500 hover:bg-slate-200 font-bold transition">ยกเลิก</button>
-        <button onClick={() => onSubmit(answers, totalScore)} disabled={!isComplete}
+        <button onClick={async () => {
+          setIsSubmitting(true);
+          try {
+              await onSubmit(answers, totalScore);
+          } finally {
+              setIsSubmitting(false);
+          }
+        }} disabled={!isComplete || isSubmitting}
           className="flex-[2] py-4 bg-gradient-to-r from-sky-400 to-indigo-400 text-white rounded-2xl font-bold hover:opacity-90 disabled:opacity-40 disabled:from-slate-300 disabled:to-slate-300 shadow-lg shadow-sky-200 transition text-lg"
         >
           บันทึกผลการประเมิน 🌟
@@ -3462,6 +3611,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
 }
 
 function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behaviorHistory = [], triggerAlert }) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [selections, setSelections] = useState(() => {
     if (initialData && initialData.selections) {
       return {
@@ -3485,6 +3635,8 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
   };
 
   const handleSave = async () => {
+    setIsSubmitting(true);
+    try {
     const timestamp = initialData ? initialData.timestamp : Date.now();
     const payload = { 
       targetUid: targetUser.id, 
@@ -3507,6 +3659,9 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
     }
     
     onDone();
+    } finally {
+        setIsSubmitting(false);
+    }
   };
 
   const renderSection = (type, categories, colorTheme) => (
@@ -3583,7 +3738,7 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
       
       <div className="flex flex-col-reverse md:flex-row gap-4 mt-8 pt-6">
         <button onClick={onDone} className="flex-1 py-4 bg-slate-100 rounded-2xl text-slate-500 font-bold hover:bg-slate-200 transition">ยกเลิก</button>
-        <button onClick={handleSave} className="flex-[2] py-4 bg-slate-800 text-white rounded-2xl font-bold hover:bg-slate-700 shadow-lg transition">
+        <button onClick={handleSave} disabled={isSubmitting} className="flex-[2] py-4 bg-slate-800 text-white rounded-2xl font-bold hover:bg-slate-700 disabled:opacity-50 shadow-lg transition">
           {initialData ? 'บันทึกการแก้ไข' : 'บันทึกพฤติกรรม'}
         </button>
       </div>
