@@ -148,8 +148,20 @@ const displayAffiliation = (aff) => {
 
 // Google Sheets Integration
 
-const syncToGoogleSheet = async (type: string, payload: any) => {
-  // DB is now handled natively via gasDb.ts
+const GOOGLE_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbwyPyksvhRl8wwGniD99SMtQFe7BnSU3w-pgJaIopomxxoM9xMFyFTidZAnsg32nHuk/exec";
+
+const syncToGoogleSheet = async (type, payload) => {
+  if (!GOOGLE_WEBAPP_URL) return;
+  try {
+    await fetch(GOOGLE_WEBAPP_URL, {
+      method: 'POST',
+      mode: 'no-cors', 
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, data: payload })
+    });
+  } catch (error) {
+    console.error("Sheet Sync Error:", error);
+  }
 };
 
 const calculatePearsonCorrelation = (x, y) => {
@@ -437,6 +449,19 @@ export default function App() {
                  <RefreshCw size={20} /> <span>ซิงก์ข้อมูล (Sync)</span>
                </button>
             )}
+            
+            {profile.role === 'superadmin' && profile.id === 'rung' && (
+               <button 
+                  onClick={() => setActiveTab('import')}
+                  className={`px-5 py-3.5 rounded-2xl flex items-center gap-3 transition-all font-medium text-sm md:text-base ${
+                    activeTab === 'import' 
+                      ? 'bg-teal-500 text-white shadow-md shadow-teal-200' 
+                      : 'bg-white text-slate-500 hover:bg-teal-50 hover:text-teal-600 border border-slate-100'
+                  }`}
+               >
+                 <Database size={20} /> <span>จัดการข้อมูล (Import/Backup)</span>
+               </button>
+            )}
           </div>
         </nav>
         
@@ -470,6 +495,9 @@ export default function App() {
             )}
             {activeTab === 'sync' && profile.role === 'superadmin' && profile.id === 'rung' && (
               <SyncDashboard triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} st5Data={st5Data} behaviorData={behaviorData} />
+            )}
+            {activeTab === 'import' && profile.role === 'superadmin' && profile.id === 'rung' && (
+              <ImportDashboard triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} profile={profile} />
             )}
           </div>
         )}
@@ -1690,7 +1718,408 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
 }
 
 // ==========================================
+
+// IMPORT DASHBOARD
+// ==========================================
+function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
+  const [inputText, setInputText] = useState('');
+  const [parsedData, setParsedData] = useState([]);
+  const [affiliation, setAffiliation] = useState(schoolOptions[0]);
+  const [isImporting, setIsImporting] = useState(false);
+  const [duplicateCheck, setDuplicateCheck] = useState(null);
+  const [importSummary, setImportSummary] = useState(null);
+
+  const handlePreview = () => {
+    if (!inputText.trim()) {
+      triggerAlert('กรุณาวางข้อมูลก่อน', 'error');
+      return;
+    }
+
+    const lines = inputText.split('\n');
+    const results = [];
+    
+    lines.forEach(line => {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length >= 10) {
+        const password = parts.pop();
+        const username = parts.pop();
+        const total = parseInt(parts.pop()) || 0;
+        const q5 = parseInt(parts.pop()) || 0;
+        const q4 = parseInt(parts.pop()) || 0;
+        const q3 = parseInt(parts.pop()) || 0;
+        const q2 = parseInt(parts.pop()) || 0;
+        const q1 = parseInt(parts.pop()) || 0;
+        const riskLevel = parts.pop();
+        const no = parts.shift();
+        const name = parts.join(' ');
+        
+        results.push({
+          no, name, riskLevel,
+          answers: [q1, q2, q3, q4, q5],
+          score: total,
+          username, password
+        });
+      }
+    });
+    
+    if (results.length === 0) {
+      triggerAlert('ไม่พบรูปแบบข้อมูลที่ถูกต้อง โปรดตรวจสอบการคัดลอกอีกครั้ง', 'error');
+    } else {
+      setParsedData(results);
+    }
+  };
+
+  const handleImport = async () => {
+    if (parsedData.length === 0) return;
+    triggerConfirm(`ยืนยันการนำเข้าข้อมูลนักเรียนจำนวน ${parsedData.length} รายการใช่หรือไม่?`, async () => {
+      setIsImporting(true);
+      try {
+        const timestamp = Date.now();
+        let successCount = 0;
+        let overwriteCount = 0;
+        let skipCount = 0;
+        
+        for (const student of parsedData) {
+          const usernameKey = student.username.toLowerCase();
+          
+          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', usernameKey);
+          const snap = await getDoc(docRef);
+          
+          let shouldImport = true;
+          let isOverwrite = false;
+          
+          if (snap.exists()) {
+             shouldImport = await new Promise((resolve) => {
+                 setDuplicateCheck({ student, resolve });
+             });
+             setDuplicateCheck(null);
+             if (shouldImport) isOverwrite = true;
+          }
+          
+          if (!shouldImport) {
+             skipCount++;
+             continue;
+          }
+          
+          // 1. Create User
+          const userData = {
+            username: usernameKey,
+            password: student.password,
+            name: student.name,
+            accountType: 'student',
+            role: 'student',
+            affiliation: affiliation,
+            status: 'approved',
+            createdAt: timestamp
+          };
+          await setDoc(docRef, userData);
+          syncToGoogleSheet('REGISTER', { username: usernameKey, ...userData });
+          
+          // 2. Create ST-5 Record
+          const st5Obj = calculateST5(student.score);
+          const st5Data = {
+            uid: usernameKey,
+            userId: usernameKey,
+            userName: student.name,
+            answers: student.answers,
+            score: student.score,
+            level: st5Obj.level,
+            timestamp: timestamp,
+            suggestion: ''
+          };
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'st5'), st5Data);
+          syncToGoogleSheet('ST5', st5Data);
+          
+          if (isOverwrite) overwriteCount++;
+          else successCount++;
+        }
+        
+        setImportSummary({
+           total: parsedData.length,
+           success: successCount,
+           overwritten: overwriteCount,
+           skipped: skipCount
+        });
+        
+        setInputText('');
+        setParsedData([]);
+      } catch (err) {
+        console.error("Import error:", err);
+        triggerAlert('เกิดข้อผิดพลาดในการนำเข้า: ' + err.message, 'error');
+      } finally {
+        setIsImporting(false);
+      }
+    });
+  };
+
+  return (
+    <>
+    <div className="bg-white p-6 md:p-10 rounded-[2.5rem] shadow-sm border border-slate-100 max-w-5xl mx-auto">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 pb-6 border-b border-slate-100">
+        <div className="flex items-center gap-4">
+            <div className="w-14 h-14 bg-teal-100 rounded-2xl flex items-center justify-center text-teal-600 shadow-inner border-2 border-white shrink-0">
+            <Database size={28} strokeWidth={2.5} />
+            </div>
+            <div>
+            <h2 className="text-2xl font-black text-slate-800">จัดการข้อมูล (Import / Backup)</h2>
+            <p className="text-slate-500 font-medium">นำเข้าข้อมูลจากตาราง PDF หรือ Excel และสำรอง/กู้คืนข้อมูลทั้งระบบ (JSON)</p>
+            </div>
+        </div>
+        <div className="flex items-center gap-2">
+            <button 
+                onClick={async () => {
+                   triggerConfirm('ยืนยันการสำรองข้อมูลทั้งหมดในระบบ (Users, ST-5, Behaviors) ออกเป็นไฟล์ JSON?', async () => {
+                       try {
+                           const usersSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
+                           const st5Snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'st5'));
+                           const behSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'behaviors'));
+                           
+                           const data = {
+                               users: usersSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+                               st5: st5Snap.docs.map(d => ({ id: d.id, ...d.data() })),
+                               behaviors: behSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+                               timestamp: new Date().toISOString()
+                           };
+                           
+                           const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                           const url = URL.createObjectURL(blob);
+                           const a = document.createElement('a');
+                           a.href = url;
+                           a.download = `st5_backup_${new Date().toISOString().split('T')[0]}.json`;
+                           document.body.appendChild(a);
+                           a.click();
+                           document.body.removeChild(a);
+                           URL.revokeObjectURL(url);
+                           triggerAlert('ดาวน์โหลดไฟล์สำรองข้อมูลเรียบร้อยแล้ว', 'success');
+                       } catch(err) {
+                           triggerAlert('เกิดข้อผิดพลาดในการสำรองข้อมูล: ' + err.message, 'error');
+                       }
+                   });
+                }}
+                className="px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-200 hover:bg-indigo-100 font-bold rounded-xl flex items-center gap-2 transition"
+            >
+                <Download size={18} /> สำรองข้อมูล (Backup)
+            </button>
+            <label className="px-4 py-2 bg-slate-800 text-white border border-slate-700 hover:bg-slate-700 font-bold rounded-xl flex items-center gap-2 transition cursor-pointer">
+                <Database size={18} /> กู้คืนข้อมูล (Restore)
+                <input 
+                    type="file" 
+                    accept=".json" 
+                    className="hidden" 
+                    onChange={(e) => {
+                        const file = e.target.files[0];
+                        if(!file) return;
+                        
+                        const reader = new FileReader();
+                        reader.onload = (evt) => {
+                            try {
+                                const data = JSON.parse(evt.target.result as string);
+                                if(!data.users || !data.st5 || !data.behaviors) {
+                                    triggerAlert('ไฟล์สำรองข้อมูลไม่ถูกต้อง หรือไม่สมบูรณ์', 'error');
+                                    return;
+                                }
+                                
+                                triggerConfirm(`คำเตือน: การกู้คืนข้อมูลจะนำข้อมูลจากไฟล์ (Users: ${data.users.length}, ST-5: ${data.st5.length}, Behaviors: ${data.behaviors.length}) เพิ่ม/ทับลงในระบบ ยืนยันหรือไม่?`, async () => {
+                                    try {
+                                        setIsImporting(true);
+                                        // 1. Users
+                                        for(const u of data.users) {
+                                            const { id, ...rest } = u;
+                                            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', id), rest);
+                                        }
+                                        // 2. ST5
+                                        for(const s of data.st5) {
+                                            const { id, ...rest } = s;
+                                            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', id), rest);
+                                        }
+                                        // 3. Behaviors
+                                        for(const b of data.behaviors) {
+                                            const { id, ...rest } = b;
+                                            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', id), rest);
+                                        }
+                                        
+                                        triggerAlert('กู้คืนข้อมูลเรียบร้อยแล้ว!', 'success');
+                                    } catch(err) {
+                                        triggerAlert('เกิดข้อผิดพลาดในการกู้คืนข้อมูล: ' + err.message, 'error');
+                                    } finally {
+                                        setIsImporting(false);
+                                    }
+                                }, 'danger');
+                            } catch(err) {
+                                triggerAlert('ไม่สามารถอ่านไฟล์ JSON ได้', 'error');
+                            }
+                        };
+                        reader.readAsText(file);
+                        e.target.value = ''; // reset
+                    }}
+                />
+            </label>
+        </div>
+      </div>
+      
+      <div className="space-y-6">
+        <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
+          <label className="block text-slate-700 font-bold mb-2">1. เลือกสังกัด (โรงเรียน/ชุมชน) สำหรับนักเรียนกลุ่มนี้</label>
+          <select 
+            className="w-full md:w-1/2 p-4 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-400 bg-white"
+            value={affiliation}
+            onChange={(e) => setAffiliation(e.target.value)}
+          >
+            {getAffiliationOptions('student').map(opt => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-slate-700 font-bold mb-2">2. วางข้อความที่คัดลอกมาจากตาราง PDF หรือ Excel</label>
+          <p className="text-sm text-slate-500 mb-4">รูปแบบที่รองรับ: ลำดับ | ชื่อ-สกุล | ความเสี่ยง | ข้อ 1 | ข้อ 2 | ข้อ 3 | ข้อ 4 | ข้อ 5 | รวม | Username | Password</p>
+          <textarea
+            className="w-full p-4 rounded-2xl border border-slate-200 focus:outline-none focus:ring-4 focus:ring-teal-500/20 focus:border-teal-400 font-mono text-sm h-64"
+            placeholder="ตัวอย่าง:
+1 นางสาวณัฐชา ประกวดแก้ว เครียดปานกลาง 2 1 2 1 1 7 Natcha 123456
+2 นางสาวปิยพัทธ์ หวันตาหา เครียดน้อย 0 0 1 1 0 2 Piyaphat 123456"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+          ></textarea>
+        </div>
+        
+        <div className="flex justify-end gap-4">
+          <button 
+            onClick={() => { setInputText(''); setParsedData([]); }}
+            className="px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition"
+          >
+            ล้างข้อมูล
+          </button>
+          <button 
+            onClick={handlePreview}
+            className="px-6 py-3 rounded-xl font-bold text-white bg-slate-800 hover:bg-slate-700 shadow-md transition"
+          >
+            ตรวจสอบรูปแบบ (Preview)
+          </button>
+        </div>
+        
+        {parsedData.length > 0 && (
+          <div className="mt-10 pt-8 border-t border-slate-100 animate-in fade-in">
+            <h3 className="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
+              <CheckCircle2 className="text-teal-500" /> ตรวจพบข้อมูล {parsedData.length} รายการ
+            </h3>
+            
+            <div className="overflow-x-auto bg-white border border-slate-200 rounded-2xl mb-6 shadow-sm">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="p-3 pl-4">ชื่อ-สกุล</th>
+                    <th className="p-3 text-center">Username</th>
+                    <th className="p-3 text-center">Password</th>
+                    <th className="p-3 text-center">คะแนนรวม</th>
+                    <th className="p-3 text-center">ผลการประเมิน</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {parsedData.map((d, i) => (
+                    <tr key={i} className="hover:bg-slate-50">
+                      <td className="p-3 pl-4 text-slate-800 font-medium">{d.name}</td>
+                      <td className="p-3 text-center text-slate-600 font-mono">{d.username}</td>
+                      <td className="p-3 text-center text-slate-600 font-mono">{d.password}</td>
+                      <td className="p-3 text-center font-bold text-slate-700">{d.score}</td>
+                      <td className="p-3 text-center">
+                        <span className="bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-600">{d.riskLevel}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            
+            <button 
+              onClick={handleImport}
+              disabled={isImporting}
+              className="w-full py-4 rounded-2xl font-bold text-white bg-gradient-to-r from-teal-400 to-emerald-400 hover:opacity-90 disabled:opacity-50 shadow-lg shadow-teal-200 transition text-lg"
+            >
+              {isImporting ? 'กำลังนำเข้าข้อมูล...' : `ยืนยันการนำเข้า ${parsedData.length} รายการ`}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+    
+    {/* Duplicate Confirmation Modal */}
+    {duplicateCheck && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
+           <div className="bg-white p-6 md:p-8 rounded-[2rem] max-w-md w-full shadow-2xl border border-slate-100 text-center space-y-5 animate-in zoom-in-95">
+              <div className="mx-auto w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center shadow-inner border-2 border-white mb-2">
+                 <AlertCircle size={32} />
+              </div>
+              <h3 className="text-xl font-black text-slate-800">พบข้อมูลซ้ำซ้อน</h3>
+              <p className="text-slate-600 text-sm">
+                 ผู้ใช้: <span className="font-bold text-slate-800">{duplicateCheck.student.name}</span><br />
+                 (Username: <span className="font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-700">{duplicateCheck.student.username}</span>)<br />
+                 มีอยู่ในระบบอยู่แล้ว คุณต้องการนำเข้าข้อมูลใหม่ไปทับข้อมูลเดิมหรือไม่?
+              </p>
+              <div className="flex gap-3 pt-4">
+                 <button 
+                    onClick={() => duplicateCheck.resolve(false)}
+                    className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition"
+                 >
+                    ยกเลิก (ข้ามรายการนี้)
+                 </button>
+                 <button 
+                    onClick={() => duplicateCheck.resolve(true)}
+                    className="flex-1 py-3 bg-amber-500 text-white font-bold rounded-xl hover:bg-amber-600 shadow-md transition"
+                 >
+                    ยืนยัน (เขียนทับ)
+                 </button>
+              </div>
+           </div>
+        </div>
+    )}
+
+    {/* Import Summary Modal */}
+    {importSummary && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
+           <div className="bg-white p-6 md:p-8 rounded-[2rem] max-w-md w-full shadow-2xl border border-slate-100 text-center space-y-5 animate-in zoom-in-95">
+              <div className="mx-auto w-16 h-16 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center shadow-inner border-2 border-white mb-2">
+                 <CheckCircle2 size={32} />
+              </div>
+              <h3 className="text-xl font-black text-slate-800">สรุปผลการนำเข้าข้อมูล</h3>
+              
+              <div className="bg-slate-50 rounded-2xl p-4 space-y-3 text-left">
+                  <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500 font-medium">รายการทั้งหมด</span>
+                      <span className="font-bold text-slate-800">{importSummary.total}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm border-t border-slate-200 pt-3">
+                      <span className="text-teal-600 font-medium">นำเข้าใหม่สำเร็จ</span>
+                      <span className="font-bold text-teal-600">{importSummary.success}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm border-t border-slate-200 pt-3">
+                      <span className="text-amber-600 font-medium">เขียนทับสำเร็จ</span>
+                      <span className="font-bold text-amber-600">{importSummary.overwritten}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm border-t border-slate-200 pt-3">
+                      <span className="text-slate-500 font-medium">ข้ามรายการ</span>
+                      <span className="font-bold text-slate-500">{importSummary.skipped}</span>
+                  </div>
+              </div>
+
+              <div className="pt-2">
+                 <button 
+                    onClick={() => setImportSummary(null)}
+                    className="w-full py-4 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-700 shadow-md transition"
+                 >
+                    ปิดหน้าต่าง
+                 </button>
+              </div>
+           </div>
+        </div>
+    )}
+    </>
+  );
+}
+
 // SUPERADMIN DASHBOARD
+
 // ==========================================
 function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, triggerConfirm, triggerDownloadConsentPdf }) {
   const [editingUser, setEditingUser] = useState(null);

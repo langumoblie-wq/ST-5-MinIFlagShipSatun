@@ -1,0 +1,202 @@
+function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
+  const [inputText, setInputText] = useState('');
+  const [parsedData, setParsedData] = useState([]);
+  const [affiliation, setAffiliation] = useState(schoolOptions[0]);
+  const [isImporting, setIsImporting] = useState(false);
+
+  const handlePreview = () => {
+    if (!inputText.trim()) {
+      triggerAlert('กรุณาวางข้อมูลก่อน', 'error');
+      return;
+    }
+
+    const lines = inputText.split('\n');
+    const results = [];
+    
+    lines.forEach(line => {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length >= 10) {
+        const password = parts.pop();
+        const username = parts.pop();
+        const total = parseInt(parts.pop()) || 0;
+        const q5 = parseInt(parts.pop()) || 0;
+        const q4 = parseInt(parts.pop()) || 0;
+        const q3 = parseInt(parts.pop()) || 0;
+        const q2 = parseInt(parts.pop()) || 0;
+        const q1 = parseInt(parts.pop()) || 0;
+        const riskLevel = parts.pop();
+        const no = parts.shift();
+        const name = parts.join(' ');
+        
+        results.push({
+          no, name, riskLevel,
+          answers: [q1, q2, q3, q4, q5],
+          score: total,
+          username, password
+        });
+      }
+    });
+    
+    if (results.length === 0) {
+      triggerAlert('ไม่พบรูปแบบข้อมูลที่ถูกต้อง โปรดตรวจสอบการคัดลอกอีกครั้ง', 'error');
+    } else {
+      setParsedData(results);
+    }
+  };
+
+  const handleImport = async () => {
+    if (parsedData.length === 0) return;
+    triggerConfirm(`ยืนยันการนำเข้าข้อมูลนักเรียนจำนวน ${parsedData.length} รายการใช่หรือไม่?`, async () => {
+      setIsImporting(true);
+      try {
+        const timestamp = Date.now();
+        let successCount = 0;
+        
+        for (const student of parsedData) {
+          const usernameKey = student.username.toLowerCase();
+          
+          // 1. Create User
+          const userData = {
+            username: usernameKey,
+            password: student.password,
+            name: student.name,
+            accountType: 'student',
+            role: 'student',
+            affiliation: affiliation,
+            status: 'approved',
+            createdAt: timestamp
+          };
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', usernameKey), userData);
+          syncToGoogleSheet('REGISTER', { username: usernameKey, ...userData });
+          
+          // 2. Create ST-5 Record
+          const st5Obj = calculateST5(student.score);
+          const st5Data = {
+            uid: usernameKey,
+            userId: usernameKey,
+            userName: student.name,
+            answers: student.answers,
+            score: student.score,
+            level: st5Obj.level,
+            timestamp: timestamp,
+            suggestion: ''
+          };
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'st5'), st5Data);
+          syncToGoogleSheet('ST5', st5Data);
+          
+          successCount++;
+        }
+        
+        triggerAlert(`นำเข้าข้อมูลสำเร็จ ${successCount} รายการ`, 'success');
+        setInputText('');
+        setParsedData([]);
+      } catch (err) {
+        console.error("Import error:", err);
+        triggerAlert('เกิดข้อผิดพลาดในการนำเข้า: ' + err.message, 'error');
+      } finally {
+        setIsImporting(false);
+      }
+    });
+  };
+
+  return (
+    <div className="bg-white p-6 md:p-10 rounded-[2.5rem] shadow-sm border border-slate-100 max-w-5xl mx-auto">
+      <div className="flex items-center gap-4 mb-8 pb-6 border-b border-slate-100">
+        <div className="w-14 h-14 bg-teal-100 rounded-2xl flex items-center justify-center text-teal-600 shadow-inner border-2 border-white">
+          <Database size={28} strokeWidth={2.5} />
+        </div>
+        <div>
+          <h2 className="text-2xl font-black text-slate-800">นำเข้าข้อมูล (Import)</h2>
+          <p className="text-slate-500 font-medium">นำเข้าข้อมูลผู้ใช้งาน และประวัติคัดกรอง ST-5 จากตาราง PDF หรือ Excel</p>
+        </div>
+      </div>
+      
+      <div className="space-y-6">
+        <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
+          <label className="block text-slate-700 font-bold mb-2">1. เลือกสังกัด (โรงเรียน/ชุมชน) สำหรับนักเรียนกลุ่มนี้</label>
+          <select 
+            className="w-full md:w-1/2 p-4 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-400 bg-white"
+            value={affiliation}
+            onChange={(e) => setAffiliation(e.target.value)}
+          >
+            {getAffiliationOptions('student').map(opt => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-slate-700 font-bold mb-2">2. วางข้อความที่คัดลอกมาจากตาราง PDF หรือ Excel</label>
+          <p className="text-sm text-slate-500 mb-4">รูปแบบที่รองรับ: ลำดับ | ชื่อ-สกุล | ความเสี่ยง | ข้อ 1 | ข้อ 2 | ข้อ 3 | ข้อ 4 | ข้อ 5 | รวม | Username | Password</p>
+          <textarea
+            className="w-full p-4 rounded-2xl border border-slate-200 focus:outline-none focus:ring-4 focus:ring-teal-500/20 focus:border-teal-400 font-mono text-sm h-64"
+            placeholder="ตัวอย่าง:
+1 นางสาวณัฐชา ประกวดแก้ว เครียดปานกลาง 2 1 2 1 1 7 Natcha 123456
+2 นางสาวปิยพัทธ์ หวันตาหา เครียดน้อย 0 0 1 1 0 2 Piyaphat 123456"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+          ></textarea>
+        </div>
+        
+        <div className="flex justify-end gap-4">
+          <button 
+            onClick={() => { setInputText(''); setParsedData([]); }}
+            className="px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition"
+          >
+            ล้างข้อมูล
+          </button>
+          <button 
+            onClick={handlePreview}
+            className="px-6 py-3 rounded-xl font-bold text-white bg-slate-800 hover:bg-slate-700 shadow-md transition"
+          >
+            ตรวจสอบรูปแบบ (Preview)
+          </button>
+        </div>
+        
+        {parsedData.length > 0 && (
+          <div className="mt-10 pt-8 border-t border-slate-100 animate-in fade-in">
+            <h3 className="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
+              <CheckCircle2 className="text-teal-500" /> ตรวจพบข้อมูล {parsedData.length} รายการ
+            </h3>
+            
+            <div className="overflow-x-auto bg-white border border-slate-200 rounded-2xl mb-6 shadow-sm">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="p-3 pl-4">ชื่อ-สกุล</th>
+                    <th className="p-3 text-center">Username</th>
+                    <th className="p-3 text-center">Password</th>
+                    <th className="p-3 text-center">คะแนนรวม</th>
+                    <th className="p-3 text-center">ผลการประเมิน</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {parsedData.map((d, i) => (
+                    <tr key={i} className="hover:bg-slate-50">
+                      <td className="p-3 pl-4 text-slate-800 font-medium">{d.name}</td>
+                      <td className="p-3 text-center text-slate-600 font-mono">{d.username}</td>
+                      <td className="p-3 text-center text-slate-600 font-mono">{d.password}</td>
+                      <td className="p-3 text-center font-bold text-slate-700">{d.score}</td>
+                      <td className="p-3 text-center">
+                        <span className="bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-600">{d.riskLevel}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            
+            <button 
+              onClick={handleImport}
+              disabled={isImporting}
+              className="w-full py-4 rounded-2xl font-bold text-white bg-gradient-to-r from-teal-400 to-emerald-400 hover:opacity-90 disabled:opacity-50 shadow-lg shadow-teal-200 transition text-lg"
+            >
+              {isImporting ? 'กำลังนำเข้าข้อมูล...' : `ยืนยันการนำเข้า ${parsedData.length} รายการ`}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
