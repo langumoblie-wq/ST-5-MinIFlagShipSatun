@@ -1734,13 +1734,28 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
       triggerAlert('กรุณาวางข้อมูลก่อน', 'error');
       return;
     }
-
     const lines = inputText.split('\n');
     const results = [];
+    
+    const isNum = (str) => !isNaN(str) && !isNaN(parseInt(str));
     
     lines.forEach(line => {
       const parts = line.trim().split(/\s+/);
       if (parts.length >= 10) {
+        let role = 'student';
+        let accountType = 'student';
+        let isNewFormat = false;
+        
+        if (parts.length >= 12 && isNum(parts[parts.length - 5]) && isNum(parts[parts.length - 6]) && isNum(parts[parts.length - 7]) && 
+            isNum(parts[parts.length - 8]) && isNum(parts[parts.length - 9]) && isNum(parts[parts.length - 10])) {
+            isNewFormat = true;
+        }
+
+        if (isNewFormat) {
+            accountType = parts.pop();
+            role = parts.pop();
+        }
+        
         const password = parts.pop();
         const username = parts.pop();
         const total = parseInt(parts.pop()) || 0;
@@ -1757,7 +1772,7 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
           no, name, riskLevel,
           answers: [q1, q2, q3, q4, q5],
           score: total,
-          username, password
+          username, password, role, accountType
         });
       }
     });
@@ -1806,8 +1821,8 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
             username: usernameKey,
             password: student.password,
             name: student.name,
-            accountType: 'student',
-            role: 'student',
+            accountType: student.accountType || 'student',
+            role: student.role || 'student',
             affiliation: affiliation,
             status: 'approved',
             createdAt: timestamp
@@ -1973,7 +1988,7 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
 
         <div>
           <label className="block text-slate-700 font-bold mb-2">2. วางข้อความที่คัดลอกมาจากตาราง PDF หรือ Excel</label>
-          <p className="text-sm text-slate-500 mb-4">รูปแบบที่รองรับ: ลำดับ | ชื่อ-สกุล | ความเสี่ยง | ข้อ 1 | ข้อ 2 | ข้อ 3 | ข้อ 4 | ข้อ 5 | รวม | Username | Password</p>
+          <p className="text-sm text-slate-500 mb-4">รูปแบบที่รองรับ: ลำดับ | ชื่อ-สกุล | ความเสี่ยง | ข้อ 1 | ข้อ 2 | ข้อ 3 | ข้อ 4 | ข้อ 5 | รวม | Username | Password | (role) | (accountType)</p>
           <textarea
             className="w-full p-4 rounded-2xl border border-slate-200 focus:outline-none focus:ring-4 focus:ring-teal-500/20 focus:border-teal-400 font-mono text-sm h-64"
             placeholder="ตัวอย่าง:
@@ -2012,6 +2027,8 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
                     <th className="p-3 pl-4">ชื่อ-สกุล</th>
                     <th className="p-3 text-center">Username</th>
                     <th className="p-3 text-center">Password</th>
+                    <th className="p-3 text-center">Role</th>
+                    <th className="p-3 text-center">AccountType</th>
                     <th className="p-3 text-center">คะแนนรวม</th>
                     <th className="p-3 text-center">ผลการประเมิน</th>
                   </tr>
@@ -2022,6 +2039,8 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
                       <td className="p-3 pl-4 text-slate-800 font-medium">{d.name}</td>
                       <td className="p-3 text-center text-slate-600 font-mono">{d.username}</td>
                       <td className="p-3 text-center text-slate-600 font-mono">{d.password}</td>
+                      <td className="p-3 text-center text-slate-600 font-mono text-sm">{d.role}</td>
+                      <td className="p-3 text-center text-slate-600 font-mono text-sm">{d.accountType}</td>
                       <td className="p-3 text-center font-bold text-slate-700">{d.score}</td>
                       <td className="p-3 text-center">
                         <span className="bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-600">{d.riskLevel}</span>
