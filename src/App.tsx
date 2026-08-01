@@ -1374,7 +1374,10 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
       {/* 1. Sidebar แสดงรายชื่อ */}
       <div className={`w-full lg:w-[400px] flex-shrink-0 flex flex-col gap-4 ${selectedUser ? 'hidden lg:flex' : 'flex'}`}>
         <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 shrink-0">
-          <h2 className="text-xl font-black text-slate-800 flex items-center gap-2 mb-3"><ClipboardList className="text-purple-400"/> รายชื่อในความดูแล</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><ClipboardList className="text-purple-400"/> รายชื่อในความดูแล</h2>
+            <span className="bg-purple-100 text-purple-700 text-xs font-bold px-3 py-1 rounded-full">ทั้งหมด {filteredStudents.length} รายการ</span>
+          </div>
           <div className="flex flex-col gap-3">
              <div className="inline-flex items-center gap-2 bg-purple-50 px-3 py-1.5 rounded-full border border-purple-100 self-start">
                <span className="text-[10px] font-bold text-purple-400">สังกัด</span>
@@ -1399,7 +1402,7 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
 
         {/* List of Users */}
         <div className="flex-1 overflow-y-auto hide-scrollbar space-y-3 pb-6">
-          {filteredStudents.map(student => {
+          {filteredStudents.map((student, index) => {
             const st5Count = st5Data.filter(d => d.uid === student.id || d.userId === student.id).length;
             const behCount = behaviorData.filter(d => d.targetUid === student.id).length;
             const isSelected = selectedUserId === student.id;
@@ -1409,7 +1412,7 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
                    className={`p-4 rounded-[2rem] shadow-sm border flex justify-between items-center hover:shadow-md transition-all cursor-pointer group transform hover:-translate-y-0.5 ${isSelected ? 'bg-purple-50 border-purple-200 ring-2 ring-purple-400/20' : 'bg-white border-slate-100 hover:border-purple-200'}`}>
                 <div className="flex items-center gap-4 overflow-hidden">
                   <div className={`w-12 h-12 shrink-0 rounded-full flex items-center justify-center font-black text-lg shadow-inner border border-white transition-colors ${isSelected ? 'bg-purple-500 text-white' : 'bg-gradient-to-br from-purple-100 to-pink-100 text-purple-500'}`}>
-                    {student.name.charAt(0)}
+                    {index + 1}
                   </div>
                   <div className="min-w-0">
                     <p className={`font-bold truncate text-sm transition ${isSelected ? 'text-purple-700' : 'text-slate-700 group-hover:text-purple-600'}`}>{student.name}</p>
