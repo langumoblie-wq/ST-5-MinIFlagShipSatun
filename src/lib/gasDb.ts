@@ -62,11 +62,16 @@ const parseDateString = (dateStr: any) => {
 };
 
 const formatRowOut = (row: any) => {
-  if (row.timestamp && typeof row.timestamp === 'string') {
-    row.timestamp = parseDateString(row.timestamp);
-  }
-  if (row.createdAt && typeof row.createdAt === 'string') {
-    row.createdAt = parseDateString(row.createdAt);
+  if (!row) return row;
+  try {
+      if (row.timestamp && typeof row.timestamp === 'string') {
+        row.timestamp = parseDateString(row.timestamp);
+      }
+      if (row.createdAt && typeof row.createdAt === 'string') {
+        row.createdAt = parseDateString(row.createdAt);
+      }
+  } catch (err) {
+      console.error("formatRowOut error:", err, row);
   }
   return row;
 };
@@ -100,12 +105,17 @@ const formatDateForSheet = (ts: any) => {
 };
 
 const formatRowIn = (data: any) => {
+  if (!data) return data;
   const payload = { ...data };
-  if (payload.timestamp && typeof payload.timestamp === 'number') {
-    payload.timestamp = formatDateForSheet(payload.timestamp);
-  }
-  if (payload.createdAt && typeof payload.createdAt === 'number') {
-    payload.createdAt = formatDateForSheet(payload.createdAt);
+  try {
+      if (payload.timestamp && typeof payload.timestamp === 'number') {
+        payload.timestamp = formatDateForSheet(payload.timestamp);
+      }
+      if (payload.createdAt && typeof payload.createdAt === 'number') {
+        payload.createdAt = formatDateForSheet(payload.createdAt);
+      }
+  } catch (err) {
+      console.error("formatRowIn error:", err, data);
   }
   return payload;
 };

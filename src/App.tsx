@@ -328,7 +328,7 @@ export default function App() {
     const behaviorRef = collection(db, 'artifacts', appId, 'public', 'data', 'behaviors');
 
     const unsubUsers = onSnapshot(baseUsersRef, (snap) => {
-      const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const users = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
       setUsersList(users);
       const updatedProfile = users.find(u => u.id === profile.id);
       if (updatedProfile) setProfile(updatedProfile);
@@ -763,7 +763,8 @@ function LoginForm({ onLoginSuccess }) {
     try {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', username.toLowerCase());
       const snap = await getDoc(docRef);
-      if (snap.exists() && String(snap.data().password) === String(password)) {
+      const data = snap.exists() ? snap.data() : null;
+      if (data && String(data.password) === String(password)) {
         onLoginSuccess({ id: snap.id, ...snap.data() });
       } else {
         setError('ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง');
