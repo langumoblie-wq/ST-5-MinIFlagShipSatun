@@ -3,7 +3,7 @@
 
 export const GAS_URL: string = "https://script.google.com/macros/s/AKfycbwyPyksvhRl8wwGniD99SMtQFe7BnSU3w-pgJaIopomxxoM9xMFyFTidZAnsg32nHuk/exec";
 
-export async function gasRequest(action: string, sheetName: string, data?: any) {
+export async function gasRequest(action: string, sheetName: string, data: any = {}) {
   if (!GAS_URL || GAS_URL === '') {
     throw new Error('Please set GAS_URL in src/lib/gasDb.ts');
   }
