@@ -153,11 +153,31 @@ const GOOGLE_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbwyPyksvhRl8w
 const syncToGoogleSheet = async (type, payload) => {
   if (!GOOGLE_WEBAPP_URL) return;
   try {
+    // Format timestamp before sending to Google Sheets
+    const formattedPayload = { ...payload };
+    
+    const formatDate = (ts) => {
+      if (!ts) return '';
+      const d = new Date(ts);
+      // Format as DD/MM/YYYY HH:mm:ss
+      return d.toLocaleString('th-TH', { 
+         day: '2-digit', month: '2-digit', year: 'numeric',
+         hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+    };
+
+    if (formattedPayload.timestamp) {
+      formattedPayload.timestamp = formatDate(formattedPayload.timestamp);
+    }
+    if (formattedPayload.createdAt) {
+      formattedPayload.createdAt = formatDate(formattedPayload.createdAt);
+    }
+
     await fetch(GOOGLE_WEBAPP_URL, {
       method: 'POST',
       mode: 'no-cors', 
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, data: payload })
+      body: JSON.stringify({ type, data: formattedPayload })
     });
   } catch (error) {
     console.error("Sheet Sync Error:", error);
