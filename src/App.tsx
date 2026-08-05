@@ -166,12 +166,7 @@ const syncToGoogleSheet = async (type, payload) => {
       });
     };
 
-    if (formattedPayload.timestamp) {
-      formattedPayload.timestamp = formatDate(formattedPayload.timestamp);
-    }
-    if (formattedPayload.createdAt) {
-      formattedPayload.createdAt = formatDate(formattedPayload.createdAt);
-    }
+    // Let Apps Script handle the date formatting natively
 
     await fetch(GOOGLE_WEBAPP_URL, {
       method: 'POST',
@@ -204,11 +199,12 @@ const parseSheetDate = (dateStr) => {
       if (typeof dateStr === 'number') return dateStr;
       const StringDate = String(dateStr);
       const parts = StringDate.split(' ');
-      if (parts.length >= 2) {
+      if (parts.length >= 2 && StringDate.includes('/')) {
          const [d, t] = parts;
-         const [day, mo, yr] = d.split('/');
-         const [h, m, s] = t.split(':');
-         return new Date(Number(yr), Number(mo)-1, Number(day), Number(h), Number(m), Number(s)).getTime();
+         const [day, mo, yr] = (d || '').split('/');
+         const [h, m, s] = (t || '').split(':');
+         const pd = new Date(Number(yr), Number(mo)-1, Number(day), Number(h) || 0, Number(m) || 0, Number(s) || 0).getTime();
+         if (!isNaN(pd)) return pd;
       }
       return new Date(StringDate).getTime() || Date.now();
   } catch(e) {
@@ -314,6 +310,7 @@ export default function App() {
         }
       } catch (error) {
         console.error("Init error:", error);
+        setError(error.message || 'เกิดข้อผิดพลาดในการเริ่มต้นระบบ');
       } finally {
         setLoading(false);
       }

@@ -122,14 +122,38 @@ function doPost(e) {
           var colIndex = headers.indexOf(key);
           if (colIndex !== -1) {
             var val = data[key];
-            sheet.getRange(foundRow, colIndex + 1).setValue(typeof val === 'object' ? JSON.stringify(val) : val);
+            if (key === 'timestamp' || key === 'createdAt' || key === 'updatedAt') {
+                 if (typeof val === 'number' || (typeof val === 'string' && !isNaN(Number(val)))) {
+                     val = new Date(Number(val));
+                 } else if (typeof val === 'string') {
+                     var pd = new Date(val);
+                     if (!isNaN(pd.getTime())) val = pd;
+                 }
+            } else if (typeof val === 'object') {
+                val = JSON.stringify(val);
+            }
+            sheet.getRange(foundRow, colIndex + 1).setValue(val);
           }
         }
       } else {
         var rowData = [];
         for (var i = 0; i < headers.length; i++) {
           var val = data[headers[i]];
-          rowData.push(val !== undefined ? (typeof val === 'object' ? JSON.stringify(val) : val) : "");
+          if (val !== undefined) {
+             if (headers[i] === 'timestamp' || headers[i] === 'createdAt' || headers[i] === 'updatedAt') {
+                 if (typeof val === 'number' || (typeof val === 'string' && !isNaN(Number(val)))) {
+                     val = new Date(Number(val));
+                 } else if (typeof val === 'string') {
+                     var pd = new Date(val);
+                     if (!isNaN(pd.getTime())) val = pd;
+                 }
+             } else if (typeof val === 'object') {
+                 val = JSON.stringify(val);
+             }
+             rowData.push(val);
+          } else {
+             rowData.push("");
+          }
         }
         sheet.appendRow(rowData);
       }

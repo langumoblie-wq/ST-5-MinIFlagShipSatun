@@ -29,7 +29,7 @@ export async function gasRequest(action: string, sheetName: string, data: any = 
     throw new Error('ไม่สามารถเชื่อมต่อฐานข้อมูล Google Sheet ได้ (โปรด Deploy สคริปต์ใหม่ แล้วนำ URL มาตั้งค่าใหม่)');
   }
   
-  if (!result.success) throw new Error(result.error);
+  if (!result.success) throw new Error(`Google Apps Script Error: ${result.error || 'Unknown Error'}. โปรดตรวจสอบว่าได้อัปเดตโค้ดใน Apps Script ล่าสุดและ Deploy เป็น New deployment แล้ว`);
   return result.data;
 }
 
@@ -106,18 +106,7 @@ const formatDateForSheet = (ts: any) => {
 
 const formatRowIn = (data: any) => {
   if (!data) return data;
-  const payload = { ...data };
-  try {
-      if (payload.timestamp && typeof payload.timestamp === 'number') {
-        payload.timestamp = formatDateForSheet(payload.timestamp);
-      }
-      if (payload.createdAt && typeof payload.createdAt === 'number') {
-        payload.createdAt = formatDateForSheet(payload.createdAt);
-      }
-  } catch (err) {
-      console.error("formatRowIn error:", err, data);
-  }
-  return payload;
+  return { ...data };
 };
 
 export const setDoc = async (paths: string[], data: any) => {
