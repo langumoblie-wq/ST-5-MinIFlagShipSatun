@@ -1034,7 +1034,6 @@ function RegisterForm({ onRegisterSuccess }) {
             </div>
          </div>
       )}
-
     </>
   );
 }
@@ -1992,9 +1991,11 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
                                             setRestoreStatus(prev => ({...prev, current: currentCount, message: `กำลังกู้คืนข้อมูลพฤติกรรม (${currentCount}/${totalItems})`}));
                                         }
                                         
-                                        setRestoreStatus(prev => ({...prev, current: totalItems, message: 'กู้คืนข้อมูลเรียบร้อยแล้ว!', finished: true}));
+                                        setRestoreStatus(null);
+                                        triggerAlert('กู้คืนข้อมูลเรียบร้อยแล้ว!', 'success');
                                     } catch(err) {
-                                        setRestoreStatus(prev => ({...prev, message: 'เกิดข้อผิดพลาด: ' + err.message, error: err.message, finished: true}));
+                                        setRestoreStatus(null);
+                                        triggerAlert('เกิดข้อผิดพลาดในการกู้คืนข้อมูล: ' + err.message, 'error');
                                     }
                                 }, 'danger');
                             } catch(err) {
@@ -2176,36 +2177,27 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
            <div className="bg-white p-6 md:p-8 rounded-[2rem] max-w-md w-full shadow-2xl border border-slate-100 text-center space-y-5 animate-in zoom-in-95">
               <div className="mx-auto w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center shadow-inner border-2 border-white mb-2">
-                 {restoreStatus.finished ? (
-                     restoreStatus.error ? <AlertCircle size={32} className="text-red-600" /> : <CheckCircle2 size={32} />
-                 ) : (
-                     <Database size={32} className="animate-pulse" />
-                 )}
+                 <Database size={32} className="animate-bounce" />
               </div>
               <h3 className="text-xl font-black text-slate-800">
-                  {restoreStatus.finished ? (restoreStatus.error ? 'เกิดข้อผิดพลาด' : 'กู้คืนข้อมูลสำเร็จ') : 'กำลังกู้คืนข้อมูล...'}
+                  กำลังกู้คืนข้อมูล...
               </h3>
-              <p className={`text-sm ${restoreStatus.error ? 'text-red-600' : 'text-slate-600'}`}>
+              <p className="text-sm text-slate-600">
                   {restoreStatus.message}
               </p>
               
-              {!restoreStatus.finished && restoreStatus.total > 0 && (
-                  <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden mt-4">
-                      <div 
-                          className="bg-indigo-500 h-full rounded-full transition-all duration-300" 
-                          style={{ width: `${Math.min(100, (restoreStatus.current / restoreStatus.total) * 100)}%` }}
-                      ></div>
-                  </div>
-              )}
-
-              {restoreStatus.finished && (
-                  <div className="pt-2">
-                     <button 
-                        onClick={() => setRestoreStatus(null)}
-                        className="w-full py-4 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-700 shadow-md transition"
-                     >
-                        ปิดหน้าต่าง
-                     </button>
+              {restoreStatus.total > 0 && (
+                  <div className="mt-4 w-full">
+                      <div className="flex justify-between text-xs font-bold text-slate-500 mb-2 px-1">
+                          <span>ความคืบหน้า</span>
+                          <span className="text-indigo-600">{Math.round((restoreStatus.current / restoreStatus.total) * 100)}%</span>
+                      </div>
+                      <div className="w-full bg-slate-100 h-4 rounded-full overflow-hidden border border-slate-200">
+                          <div 
+                              className="bg-gradient-to-r from-indigo-400 to-purple-500 h-full rounded-full transition-all duration-300 shadow-sm" 
+                              style={{ width: `${Math.min(100, (restoreStatus.current / restoreStatus.total) * 100)}%` }}
+                          ></div>
+                      </div>
                   </div>
               )}
            </div>

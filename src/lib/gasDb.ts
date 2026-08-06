@@ -1,36 +1,21 @@
 // gasDb.ts
 // This module acts as a drop-in replacement for Firestore, bridging to Google Apps Script.
 
-export const GAS_URL: string = "https://script.google.com/macros/s/AKfycbxFPnJm9fQloA3vEbM909DJLelsfN6nWSmJ6cLgEYojFZq-pcwza93rQmca4np7H-NC/exec";
-
-let cachedSyncData: any = {};
-let lastSyncTime = 0;
+export const GAS_URL: string = "https://script.google.com/macros/s/AKfycbwyPyksvhRl8wwGniD99SMtQFe7BnSU3w-pgJaIopomxxoM9xMFyFTidZAnsg32nHuk/exec";
 
 export async function gasRequest(action: string, sheetName: string, data: any = {}) {
   if (!GAS_URL || GAS_URL === '') {
     throw new Error('Please set GAS_URL in src/lib/gasDb.ts');
   }
   
-  if (action === 'GET') {
-      const now = Date.now();
-      if (now - lastSyncTime < 5000 && cachedSyncData[sheetName]) {
-          return cachedSyncData[sheetName];
-      }
-  }
-  
   let response;
   try {
-    const payload: any = { action, sheetName };
-    if (action !== 'GET') {
-      payload.data = data;
-    }
-    
     response = await fetch(GAS_URL, {
       method: 'POST',
       headers: {
-        'Content-Type': 'text/plain;charset=utf-8'
+        'Content-Type': 'text/plain;charset=utf-8' // important for avoiding CORS preflight
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ action, sheetName, data })
     });
   } catch (e) {
     throw new Error('ไม่สามารถเชื่อมต่อฐานข้อมูลได้ (โปรดตรวจสอบว่าตั้งค่า Google Apps Script > Who has access: Anyone)');
@@ -44,20 +29,8 @@ export async function gasRequest(action: string, sheetName: string, data: any = 
     throw new Error('ไม่สามารถเชื่อมต่อฐานข้อมูล Google Sheet ได้ (โปรด Deploy สคริปต์ใหม่ แล้วนำ URL มาตั้งค่าใหม่)');
   }
   
-  if (!result.success && result.status !== 'success') {
-    if (result.error && result.error.includes('createdAt')) {
-      throw new Error(`Google Apps Script Error: โปรดนำโค้ดจากไฟล์ GAS_API_CODE.gs ไปวางทับใน Apps Script แล้วกด Deploy -> New deployment ใหม่ เนื่องจากโค้ดฝั่งเซิร์ฟเวอร์ยังเป็นเวอร์ชันเก่า`);
-    }
-    throw new Error(`Google Apps Script Error: ${result.error || 'Unknown Error'}. โปรดตรวจสอบว่าได้อัปเดตโค้ดใน Apps Script ล่าสุดและ Deploy เป็น New deployment แล้ว`);
-  }
-  
-  const resData = result.data || [];
-  if (action === 'GET') {
-      cachedSyncData[sheetName] = resData;
-      lastSyncTime = Date.now();
-  }
-  
-  return resData;
+  if (!result.success) throw new Error(`Google Apps Script Error: ${result.error || 'Unknown Error'}. โปรดตรวจสอบว่าได้อัปเดตโค้ดใน Apps Script ล่าสุดและ Deploy เป็น New deployment แล้ว`);
+  return result.data;
 }
 
 export const getFirestore = () => ({});
@@ -69,7 +42,6 @@ const getSheetName = (paths: string[]) => {
   if (name === 'users') return 'Users';
   if (name === 'st5') return 'ST5';
   if (name === 'behaviors') return 'Behaviors';
-  if (name === 'settings') return 'Settings';
   return name || 'Unknown';
 };
 
@@ -82,7 +54,7 @@ const parseDateString = (dateStr: any) => {
       const [d, t] = parts;
       const [day, mo, yr] = d.split('/');
       const [h, m, s] = t.split(':');
-      const year = Number(yr) > 2500 ? Number(yr) - 543 : Number(yr); 
+      const year = Number(yr) > 2500 ? Number(yr) - 543 : Number(yr); // Handle Thai Buddhist Year if present
       const dateObj = new Date(year, Number(mo)-1, Number(day), Number(h), Number(m), Number(s));
       if (!isNaN(dateObj.getTime())) return dateObj.getTime();
   }
@@ -108,7 +80,7 @@ export const getDoc = async (paths: string[]) => {
   const sheetName = getSheetName(paths);
   const docId = paths[5];
   const rows = await gasRequest('GET', sheetName);
-  const row = (rows || []).find((r: any) => String(r.id) === String(docId));
+  const row = rows.find((r: any) => String(r.id) === String(docId));
   if (row) {
     return { exists: () => true, id: docId, data: () => formatRowOut(row) };
   }
@@ -142,7 +114,7 @@ export const setDoc = async (paths: string[], data: any) => {
   const docId = paths[5];
   
   const rows = await gasRequest('GET', sheetName);
-  const exists = (rows || []).find((r: any) => String(r.id) === String(docId));
+  const exists = rows.find((r: any) => String(r.id) === String(docId));
   
   const payload = { id: docId, ...formatRowIn(data) };
   if (exists) {
@@ -185,6 +157,6 @@ export const onSnapshot = (paths: string[], callback: (snap: any) => void) => {
     }
     if (!isCancelled) setTimeout(poll, 15000); 
   };
-  poll();
+  poll(); // start immediately
   return () => { isCancelled = true; };
 };
