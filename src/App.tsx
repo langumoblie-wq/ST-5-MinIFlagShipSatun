@@ -310,7 +310,7 @@ export default function App() {
         }
       } catch (error) {
         console.error("Init error:", error);
-        setError(error.message || 'เกิดข้อผิดพลาดในการเริ่มต้นระบบ');
+        setAlertConfig({ isOpen: true, message: error.message || 'เกิดข้อผิดพลาดในการเริ่มต้นระบบ', type: 'error' });
       } finally {
         setLoading(false);
       }
