@@ -1,7 +1,7 @@
 // gasDb.ts
 // This module acts as a drop-in replacement for Firestore, bridging to Google Apps Script.
 
-export const GAS_URL: string = "https://script.google.com/macros/s/AKfycbxFPnJm9fQloA3vEbM909DJLelsfN6nWSmJ6cLgEYojFZq-pcwza93rQmca4np7H-NC/exec";
+export const GAS_URL: string = "https://script.google.com/macros/s/AKfycbwyPyksvhRl8wwGniD99SMtQFe7BnSU3w-pgJaIopomxxoM9xMFyFTidZAnsg32nHuk/exec";
 
 let cachedSyncData: any = {};
 let lastSyncTime = 0;
