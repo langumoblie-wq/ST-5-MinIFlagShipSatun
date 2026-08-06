@@ -1,3 +1,9 @@
+// โค้ด Google Apps Script สำหรับเป็น API ให้กับ Mental Care Web App
+// คัดลอกโค้ดนี้ทั้งหมดไปใส่ใน Google Apps Script
+// จากนั้นกด Deploy -> New deployment -> เลือกประเภท Web App
+// Execute as: Me (ตัวฉันเอง)
+// Who has access: Anyone (ทุกคน)
+
 // !!! ฟังก์ชันสำหรับขอสิทธิ์ (รันฟังก์ชันนี้ครั้งแรกเพื่อขอสิทธิ์) !!!
 function setup() {
   // เรียกใช้งาน DriveApp เพื่อให้ Google Apps Script ขอสิทธิ์การจัดการไฟล์แบบเต็ม

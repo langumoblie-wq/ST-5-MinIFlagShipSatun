@@ -1034,6 +1034,47 @@ function RegisterForm({ onRegisterSuccess }) {
             </div>
          </div>
       )}
+
+    {/* Restore Progress Modal */}
+    {restoreStatus && restoreStatus.isRestoring && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
+           <div className="bg-white p-6 md:p-8 rounded-[2rem] max-w-md w-full shadow-2xl border border-slate-100 text-center space-y-5 animate-in zoom-in-95">
+              <div className="mx-auto w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center shadow-inner border-2 border-white mb-2">
+                 {restoreStatus.finished ? (
+                     restoreStatus.error ? <AlertCircle size={32} className="text-red-600" /> : <CheckCircle2 size={32} />
+                 ) : (
+                     <Database size={32} className="animate-pulse" />
+                 )}
+              </div>
+              <h3 className="text-xl font-black text-slate-800">
+                  {restoreStatus.finished ? (restoreStatus.error ? 'เกิดข้อผิดพลาด' : 'กู้คืนข้อมูลสำเร็จ') : 'กำลังกู้คืนข้อมูล...'}
+              </h3>
+              <p className={`text-sm ${restoreStatus.error ? 'text-red-600' : 'text-slate-600'}`}>
+                  {restoreStatus.message}
+              </p>
+              
+              {!restoreStatus.finished && restoreStatus.total > 0 && (
+                  <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden mt-4">
+                      <div 
+                          className="bg-indigo-500 h-full rounded-full transition-all duration-300" 
+                          style={{ width: `${Math.min(100, (restoreStatus.current / restoreStatus.total) * 100)}%` }}
+                      ></div>
+                  </div>
+              )}
+
+              {restoreStatus.finished && (
+                  <div className="pt-2">
+                     <button 
+                        onClick={() => setRestoreStatus(null)}
+                        className="w-full py-4 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-700 shadow-md transition"
+                     >
+                        ปิดหน้าต่าง
+                     </button>
+                  </div>
+              )}
+           </div>
+        </div>
+    )}
     </>
   );
 }
@@ -1749,6 +1790,7 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
   const [isImporting, setIsImporting] = useState(false);
   const [duplicateCheck, setDuplicateCheck] = useState(null);
   const [importSummary, setImportSummary] = useState(null);
+  const [restoreStatus, setRestoreStatus] = useState(null);
 
   const handlePreview = () => {
     if (!inputText.trim()) {
@@ -1957,28 +1999,42 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
                                 
                                 triggerConfirm(`คำเตือน: การกู้คืนข้อมูลจะนำข้อมูลจากไฟล์ (Users: ${data.users.length}, ST-5: ${data.st5.length}, Behaviors: ${data.behaviors.length}) เพิ่ม/ทับลงในระบบ ยืนยันหรือไม่?`, async () => {
                                     try {
-                                        setIsImporting(true);
+                                        const totalItems = data.users.length + data.st5.length + data.behaviors.length;
+                                        setRestoreStatus({
+                                            isRestoring: true,
+                                            current: 0,
+                                            total: totalItems,
+                                            message: 'เริ่มต้นการกู้คืนข้อมูล...',
+                                            finished: false,
+                                            error: null
+                                        });
+                                        let currentCount = 0;
+
                                         // 1. Users
                                         for(const u of data.users) {
                                             const { id, ...rest } = u;
                                             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', id), rest);
+                                            currentCount++;
+                                            setRestoreStatus(prev => ({...prev, current: currentCount, message: `กำลังกู้คืนข้อมูลผู้ใช้ (${currentCount}/${totalItems})`}));
                                         }
                                         // 2. ST5
                                         for(const s of data.st5) {
                                             const { id, ...rest } = s;
                                             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', id), rest);
+                                            currentCount++;
+                                            setRestoreStatus(prev => ({...prev, current: currentCount, message: `กำลังกู้คืนข้อมูล ST-5 (${currentCount}/${totalItems})`}));
                                         }
                                         // 3. Behaviors
                                         for(const b of data.behaviors) {
                                             const { id, ...rest } = b;
                                             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', id), rest);
+                                            currentCount++;
+                                            setRestoreStatus(prev => ({...prev, current: currentCount, message: `กำลังกู้คืนข้อมูลพฤติกรรม (${currentCount}/${totalItems})`}));
                                         }
                                         
-                                        triggerAlert('กู้คืนข้อมูลเรียบร้อยแล้ว!', 'success');
+                                        setRestoreStatus(prev => ({...prev, current: totalItems, message: 'กู้คืนข้อมูลเรียบร้อยแล้ว!', finished: true}));
                                     } catch(err) {
-                                        triggerAlert('เกิดข้อผิดพลาดในการกู้คืนข้อมูล: ' + err.message, 'error');
-                                    } finally {
-                                        setIsImporting(false);
+                                        setRestoreStatus(prev => ({...prev, message: 'เกิดข้อผิดพลาด: ' + err.message, error: err.message, finished: true}));
                                     }
                                 }, 'danger');
                             } catch(err) {
@@ -2151,6 +2207,47 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
                     ปิดหน้าต่าง
                  </button>
               </div>
+           </div>
+        </div>
+    )}
+
+    {/* Restore Progress Modal */}
+    {restoreStatus && restoreStatus.isRestoring && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
+           <div className="bg-white p-6 md:p-8 rounded-[2rem] max-w-md w-full shadow-2xl border border-slate-100 text-center space-y-5 animate-in zoom-in-95">
+              <div className="mx-auto w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center shadow-inner border-2 border-white mb-2">
+                 {restoreStatus.finished ? (
+                     restoreStatus.error ? <AlertCircle size={32} className="text-red-600" /> : <CheckCircle2 size={32} />
+                 ) : (
+                     <Database size={32} className="animate-pulse" />
+                 )}
+              </div>
+              <h3 className="text-xl font-black text-slate-800">
+                  {restoreStatus.finished ? (restoreStatus.error ? 'เกิดข้อผิดพลาด' : 'กู้คืนข้อมูลสำเร็จ') : 'กำลังกู้คืนข้อมูล...'}
+              </h3>
+              <p className={`text-sm ${restoreStatus.error ? 'text-red-600' : 'text-slate-600'}`}>
+                  {restoreStatus.message}
+              </p>
+              
+              {!restoreStatus.finished && restoreStatus.total > 0 && (
+                  <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden mt-4">
+                      <div 
+                          className="bg-indigo-500 h-full rounded-full transition-all duration-300" 
+                          style={{ width: `${Math.min(100, (restoreStatus.current / restoreStatus.total) * 100)}%` }}
+                      ></div>
+                  </div>
+              )}
+
+              {restoreStatus.finished && (
+                  <div className="pt-2">
+                     <button 
+                        onClick={() => setRestoreStatus(null)}
+                        className="w-full py-4 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-700 shadow-md transition"
+                     >
+                        ปิดหน้าต่าง
+                     </button>
+                  </div>
+              )}
            </div>
         </div>
     )}
@@ -3461,27 +3558,32 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
 // FORM COMPONENTS
 // ==========================================
 function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
-  const [targets, setTargets] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('project_targets')) || {};
-    } catch {
-      return {};
-    }
-  });
-  const [globalTarget, setGlobalTarget] = useState(() => {
-    return parseInt(localStorage.getItem('project_global_target')) || 1000;
-  });
+  const [targets, setTargets] = useState({});
+  const [globalTarget, setGlobalTarget] = useState(1000);
   const [selectedAffiliation, setSelectedAffiliation] = useState('all');
   const [expandedRows, setExpandedRows] = useState({});
   const [editingTarget, setEditingTarget] = useState(null);
 
   useEffect(() => {
-    localStorage.setItem('project_targets', JSON.stringify(targets));
-  }, [targets]);
-
-  useEffect(() => {
-    localStorage.setItem('project_global_target', globalTarget.toString());
-  }, [globalTarget]);
+    const loadTargets = async () => {
+      try {
+        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'project_targets');
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.targets) {
+            try { setTargets(JSON.parse(data.targets)); } catch (e) {}
+          }
+          if (data.globalTarget) {
+            setGlobalTarget(Number(data.globalTarget));
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load targets", err);
+      }
+    };
+    loadTargets();
+  }, []);
 
   const affiliations = Array.from(new Set(users.filter(u => u.accountType === 'student').map(u => u.affiliation).filter(Boolean)));
   
@@ -3584,13 +3686,29 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
       setExpandedRows(prev => ({ ...prev, [affil]: !prev[affil] }));
   };
 
-  const handleSaveTarget = (affil, value) => {
+  const handleSaveTarget = async (affil, value) => {
+      let newGlobal = globalTarget;
+      let newTargets = { ...targets };
+
       if (affil === 'all') {
-          setGlobalTarget(Number(value));
+          newGlobal = Number(value);
+          setGlobalTarget(newGlobal);
       } else {
-          setTargets(prev => ({ ...prev, [affil]: Number(value) }));
+          newTargets[affil] = Number(value);
+          setTargets(newTargets);
       }
       setEditingTarget(null);
+
+      try {
+         const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'project_targets');
+         await setDoc(docRef, {
+             targets: JSON.stringify(newTargets),
+             globalTarget: newGlobal,
+             updatedAt: Date.now()
+         });
+      } catch (err) {
+         console.error("Failed to save target", err);
+      }
   };
 
   const [isPrinting, setIsPrinting] = useState(false);
