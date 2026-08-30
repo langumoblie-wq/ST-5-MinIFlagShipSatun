@@ -4348,6 +4348,102 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
   };
   const recommendations = generateRecommendations();
 
+  // --- ADD BEHAVIOR LOGIC ---
+  const posBehaviorsList = [
+    "การใฝ่เรียนรู้", "การคิดวิเคราะห์", "การแก้ปัญหา", 
+    "การควบคุมอารมณ์", "ความเห็นอกเห็นใจผู้อื่น", "ความภาคภูมิใจในตนเอง", 
+    "ความรับผิดชอบและวินัย", "จิตสาธารณะ", "การดูแลสุขภาพกาย"
+  ];
+  
+  const negBehaviorsList = [
+    "การใช้ความรุนแรงและรังแกกัน (Bullying)", 
+    "การก่อความเดือดร้อนรำคาญ",
+    "การใช้สารเสพติด", 
+    "การพนัน", 
+    "พฤติกรรมทางเพศที่ไม่ปลอดภัย",
+    "ภาวะซึมเศร้าและวิตกกังวล",
+    "อารมณ์ฉุนเฉียวและก้าวร้าว",
+    "การหนีเรียน", 
+    "พฤติกรรมถดถอยในการเรียน",
+    "การหมกมุ่นกับสื่อออนไลน์"
+  ];
+
+  let badCategories = {};
+  let goodCategories = {};
+  behaviorLinked.forEach(beh => {
+    if (beh.selections && beh.selections.undesirable) {
+      beh.selections.undesirable.forEach(item => { badCategories[item] = (badCategories[item] || 0) + 1; });
+    }
+    if (beh.selections && beh.selections.desirable) {
+      beh.selections.desirable.forEach(item => { goodCategories[item] = (goodCategories[item] || 0) + 1; });
+    }
+  });
+
+  const radarData = posBehaviorsList.map(item => ({
+    subject: item.replace('การ', '').replace('ความ', ''), 
+    A: goodCategories[item] || 0,
+    fullMark: totalScreenedStudents || 1
+  }));
+  const radarMaxPos = Math.max(...radarData.map(d => d.A));
+  const radarDomainMax = radarMaxPos === 0 ? 1 : 'dataMax';
+
+  const negativeChartData = negBehaviorsList.map(item => {
+    let shortName = item;
+    if (item === "การใช้ความรุนแรงและรังแกกัน (Bullying)") shortName = "Bullying";
+    else if (item === "การก่อความเดือดร้อนรำคาญ") shortName = "เดือดร้อนรำคาญ";
+    else if (item === "การใช้สารเสพติด") shortName = "สารเสพติด";
+    else if (item === "การพนัน") shortName = "พนัน";
+    else if (item === "พฤติกรรมทางเพศที่ไม่ปลอดภัย") shortName = "พฤติกรรมทางเพศ";
+    else if (item === "ภาวะซึมเศร้าและวิตกกังวล") shortName = "ซึมเศร้า/วิตกกังวล";
+    else if (item === "อารมณ์ฉุนเฉียวและก้าวร้าว") shortName = "ก้าวร้าว";
+    else if (item === "การหนีเรียน") shortName = "หนีเรียน";
+    else if (item === "พฤติกรรมถดถอยในการเรียน") shortName = "เรียนถดถอย";
+    else if (item === "การหมกมุ่นกับสื่อออนไลน์") shortName = "ติดสื่อออนไลน์";
+      
+    return {
+      name: shortName,
+      count: badCategories[item] || 0
+    };
+  }).sort((a, b) => b.count - a.count);
+  
+  const maxPositive = radarData.reduce((max, current) => current.A > (max?.A || 0) ? current : max, radarData[0]);
+  const positiveInterpretation = radarMaxPos === 0 
+    ? 'การแปรผล: ปัจจุบันยังไม่พบข้อมูลพฤติกรรมเชิงบวก' 
+    : `การแปรผล: จุดแข็งที่พบมากที่สุดคือ "${maxPositive?.subject || 'ไม่มีข้อมูล'}" ควรส่งเสริมเพื่อเป็นปัจจัยปกป้อง`;
+
+  const maxNegative = negativeChartData[0];
+  const negativeInterpretation = maxNegative?.count === 0 
+    ? 'การแปรผล: ปัจจุบันยังไม่พบข้อมูลพฤติกรรมเสี่ยง' 
+    : `การแปรผล: พฤติกรรมเสี่ยงที่พบมากที่สุดคือ "${maxNegative?.name || 'ไม่มีข้อมูล'}" (${maxNegative?.count} ครั้ง) ควรเฝ้าระวังอย่างใกล้ชิด`;
+
+  // --- AI INSIGHTS (Issue Specific) ---
+  const generateAIInsights = () => {
+    let insights = [];
+    if (totalScreenedStudents < 5) return ["ข้อมูลยังไม่เพียงพอสำหรับการวิเคราะห์เชิงลึกด้วย AI (ต้องการข้อมูลอย่างน้อย 5 เคส)"];
+    
+    // Insight 1: Physical Health vs Gaming/Stress
+    const lowHealthCount = radarData.find(d => d.subject === "ดูแลสุขภาพกาย")?.A || 0;
+    const gamingCount = negativeChartData.find(d => d.name === "ติดสื่อออนไลน์")?.count || 0;
+    if (lowHealthCount === 0 && gamingCount > 0) {
+        insights.push(`พบความเชื่อมโยงน่าสนใจ: มีแนวโน้มที่เยาวชนขาดการดูแลสุขภาพกายจะสัมพันธ์กับพฤติกรรมติดสื่อออนไลน์ (${gamingCount} เคส)`);
+    }
+
+    // Insight 2: Self-esteem vs Bullying
+    const esteemCount = radarData.find(d => d.subject === "ภาคภูมิใจในตนเอง")?.A || 0;
+    const bullyingCount = negativeChartData.find(d => d.name === "Bullying")?.count || 0;
+    if (esteemCount === 0 && bullyingCount > 0) {
+        insights.push(`พฤติกรรมการรังแกกัน (Bullying) ${bullyingCount} เคส มักเกิดควบคู่กับการขาดความภาคภูมิใจในตนเอง`);
+    }
+
+    if (insights.length === 0) {
+      insights.push("ระดับสุขภาพจิตและพฤติกรรมของประชากรกลุ่มนี้ยังอยู่ในเกณฑ์ที่ควบคุมได้ดี ไม่มีสัญญาณเตือนภัยเชิงพฤติกรรมร่วมที่น่ากังวลแบบก้าวกระโดด");
+    }
+
+    return insights;
+  };
+  const aiInsightTexts = generateAIInsights();
+
+
   // Export PDF Logic
   // Export PDF Logic
   // Export PDF Logic
@@ -4375,12 +4471,7 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
       // Wait for React to render and fonts to load
       await new Promise(resolve => setTimeout(resolve, 800));
       
-      const canvas = await toPng(element, { 
-          quality: 1.0, 
-          backgroundColor: '#ffffff', 
-          pixelRatio: 2,
-          width: 794
-      });
+
       
       // Hide it again
       element.style.position = originalPosition;
@@ -4391,20 +4482,28 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
       
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (element.offsetHeight * pdfWidth) / 794; 
-      
-      let position = 0;
-      let heightLeft = pdfHeight;
       const pageHeight = pdf.internal.pageSize.getHeight();
+
+      const pages = Array.from(element.children);
       
-      pdf.addImage(canvas, 'PNG', 0, position, pdfWidth, pdfHeight);
-      heightLeft -= pageHeight;
-      
-      while (heightLeft > 0) {
-          position = heightLeft - pdfHeight;
-          pdf.addPage();
-          pdf.addImage(canvas, 'PNG', 0, position, pdfWidth, pdfHeight);
-          heightLeft -= pageHeight;
+      for (let i = 0; i < pages.length; i++) {
+        const pageEl = pages[i];
+        const pageCanvas = await toPng(pageEl, { 
+          quality: 1.0, 
+          backgroundColor: '#ffffff', 
+          pixelRatio: 2, 
+          width: 794 
+        });
+        
+        const pageImgHeight = (pageEl.offsetHeight * pdfWidth) / 794;
+        
+        if (i > 0) pdf.addPage();
+        
+        // If content is longer than A4, scale it down to fit one page.
+        // Otherwise, draw it at natural size.
+        const finalHeight = pageImgHeight > pageHeight ? pageHeight : pageImgHeight;
+        
+        pdf.addImage(pageCanvas, 'PNG', 0, 0, pdfWidth, finalHeight);
       }
       
       pdf.save(`Executive_Report_${new Date().getTime()}.pdf`);
@@ -4507,6 +4606,78 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
       </>
   );
 
+  const renderBehavior = (isPrint = false) => (
+      <div className="grid lg:grid-cols-2 gap-6 pt-2">
+            {/* Radar Chart (Positive Behaviors) */}
+            <div className="space-y-4">
+              <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
+                <CheckCircle2 size={18} className="text-teal-400"/> Positive Behavior Radar
+              </h3>
+              <div className="bg-slate-50/50 p-2 rounded-2xl border border-slate-100 flex flex-col items-center">
+                <p className="text-[10px] text-slate-400 w-full mb-1 text-center">จุดแข็งและศักยภาพของเป้าหมาย (Protective Factors)</p>
+                <div className="w-full h-64">
+                  {isPrint ? (
+                    <RadarChart cx={150} cy={120} outerRadius={70} width={300} height={250} data={radarData}>
+                      <PolarGrid stroke="#e2e8f0" />
+                      <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }} />
+                      <PolarRadiusAxis angle={30} domain={[0, radarDomainMax]} tick={false} axisLine={false}/>
+                      <Radar name="ความถี่พฤติกรรมเชิงบวก" dataKey="A" stroke="#14b8a6" fill="#14b8a6" fillOpacity={radarMaxPos === 0 ? 0 : 0.4} strokeOpacity={radarMaxPos === 0 ? 0 : 1} isAnimationActive={false} />
+                    </RadarChart>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
+                        <PolarGrid stroke="#e2e8f0" />
+                        <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }} />
+                        <PolarRadiusAxis angle={30} domain={[0, radarDomainMax]} tick={false} axisLine={false}/>
+                        <Radar name="ความถี่พฤติกรรมเชิงบวก" dataKey="A" stroke="#14b8a6" fill="#14b8a6" fillOpacity={radarMaxPos === 0 ? 0 : 0.4} strokeOpacity={radarMaxPos === 0 ? 0 : 1} />
+                        <Tooltip contentStyle={{borderRadius: '12px', border: 'none'}}/>
+                      </RadarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </div>
+              <div className={`mt-2 p-4 bg-teal-50/50 rounded-2xl border border-teal-100 ${isPrint ? '!p-2 !mt-1' : ''}`}>
+                <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-teal-800`}>{positiveInterpretation}</p>
+              </div>
+            </div>
+
+            {/* Negative Behavior */}
+            <div className="space-y-4">
+               <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
+                 <AlertCircle size={18} className="text-rose-400"/> Negative Behavior Distribution
+               </h3>
+               <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 flex flex-col justify-center h-[282px]">
+                 <p className="text-[10px] text-slate-400 w-full mb-3 text-center">จัดอันดับความถี่ของพฤติกรรมเสี่ยงและปัญหา (Risk Factors)</p>
+                 <div className="space-y-3 overflow-y-auto pr-2">
+                    {negativeChartData.slice(0, 5).map((item, idx) => {
+                      const maxCount = negativeChartData[0]?.count || 1;
+                      const pct = (item.count / maxCount) * 100;
+                      let barColor = "bg-rose-500";
+                      if (idx > 0 && pct < 70) barColor = "bg-orange-400";
+                      if (idx > 2 && pct < 40) barColor = "bg-amber-300";
+                      if (item.count === 0) barColor = "bg-slate-200";
+
+                      return (
+                        <div key={idx} className="relative">
+                          <div className="flex justify-between text-[11px] font-bold text-slate-700 mb-1 relative z-10 px-1">
+                             <span>{idx + 1}. {item.name}</span>
+                             <span>{item.count > 0 ? `${item.count} ครั้ง` : '-'}</span>
+                          </div>
+                          <div className="w-full bg-slate-100 h-5 rounded-md overflow-hidden relative">
+                            <div className={`h-full ${barColor} ${isPrint ? '' : 'transition-all duration-1000'}`} style={{ width: `${item.count === 0 ? 0 : Math.max(pct, 5)}%` }}></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                 </div>
+               </div>
+               <div className={`mt-2 p-4 bg-rose-50/50 rounded-2xl border border-rose-100 ${isPrint ? '!p-2 !mt-1' : ''}`}>
+                 <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-rose-800`}>{negativeInterpretation}</p>
+               </div>
+            </div>
+      </div>
+  );
+
   const renderTable = (isPrint = false) => {
         const sortedByRisk = [...tableData].sort((a, b) => b.risk - a.risk);
         const topRiskAffil = sortedByRisk[0];
@@ -4597,25 +4768,39 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
          )}
 
          {reportTab === 'behavior' && (
-            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 text-center py-10">
-               <ShieldCheck size={48} className="mx-auto text-emerald-300 mb-4" />
-               <h3 className="text-xl font-bold text-slate-700">รายงานข้อมูลพฤติกรรม</h3>
-               <p className="text-slate-500">รวบรวมข้อมูลพฤติกรรมเชิงบวก และ พฤติกรรมที่ต้องเฝ้าระวังเพื่อใช้ในการวิเคราะห์ต่อไป</p>
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+               {renderBehavior()}
             </div>
          )}
 
          {reportTab === 'policy' && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-               <h3 className="text-lg font-black text-indigo-800 flex items-center gap-2 border-b border-indigo-100 pb-3">
-                 <Bot size={24} /> บทวิเคราะห์แนวโน้ม และข้อเสนอแนะ
-               </h3>
-               <div className="space-y-4">
-                 {recommendations.map((rec, idx) => (
-                    <div key={idx} className="bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100">
-                       <h4 className="font-bold text-indigo-700 mb-2">{rec.title}</h4>
-                       <p className="text-slate-700 text-sm leading-relaxed">{rec.text}</p>
-                    </div>
-                 ))}
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+               <div className="space-y-6">
+                 <h3 className="text-lg font-black text-indigo-800 flex items-center gap-2 border-b border-indigo-100 pb-3">
+                   <Bot size={24} /> บทวิเคราะห์ AI เชิงลึกรายประเด็น
+                 </h3>
+                 <div className="space-y-4">
+                   {aiInsightTexts.map((text, idx) => (
+                      <div key={idx} className="flex gap-4 items-start bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100">
+                         <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0">{idx + 1}</div>
+                         <p className="text-slate-700 text-sm leading-relaxed pt-1.5">{text}</p>
+                      </div>
+                   ))}
+                 </div>
+               </div>
+
+               <div className="space-y-6">
+                 <h3 className="text-lg font-black text-blue-800 flex items-center gap-2 border-b border-blue-100 pb-3">
+                   <Lightbulb size={24} /> ข้อเสนอแนะนโยบายสำหรับผู้บริหาร
+                 </h3>
+                 <div className="space-y-4">
+                   {recommendations.map((rec, idx) => (
+                      <div key={idx} className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100">
+                         <h4 className="font-bold text-blue-700 mb-2">{rec.title}</h4>
+                         <p className="text-slate-700 text-sm leading-relaxed">{rec.text}</p>
+                      </div>
+                   ))}
+                 </div>
                </div>
             </div>
          )}
@@ -4625,38 +4810,97 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
           HIDDEN PRINTABLE VIEW (Continuous layout for PDF Export) 
           --------------------------------------------------------- */}
       <div className="fixed top-[9999px] left-[9999px] w-[794px] pointer-events-none z-[-100]">
-        <div ref={printRef} className="w-[794px] bg-white print-container p-12 text-slate-800 flex flex-col space-y-8 box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
-           
-           <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-2 shrink-0">
-              <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
-              <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
-              <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-           </div>
-           
-           <div className="space-y-4 shrink-0">
-             <h2 className="text-xl font-black text-pink-700 flex items-center gap-2 border-l-4 border-pink-500 pl-3">สรุปภาพรวม (KPIs)</h2>
-             {renderKPIs(true)}
+        <div ref={printRef} className="w-[794px] flex flex-col">
+            
+           {/* PAGE 1: KPIs & Mental */}
+           <div className="w-[794px] min-h-[1123px] bg-white print-container p-12 text-slate-800 flex flex-col box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
+               <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-8 shrink-0">
+                  <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
+                  <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+                  <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+               </div>
+               
+               <div className="space-y-4 shrink-0 flex-grow">
+                 <h2 className="text-xl font-black text-pink-700 flex items-center gap-2 border-l-4 border-pink-500 pl-3 mb-6">สรุปภาพรวม (KPIs) และ สุขภาพจิต (Mental)</h2>
+                 {renderKPIs(true)}
+               </div>
+
+               <div className="mt-auto pt-6 border-t border-slate-100 shrink-0 text-center text-xs text-slate-400">
+                  เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร (หน้า 1/4)
+               </div>
            </div>
 
-           <div className="space-y-4 shrink-0">
-             <h2 className="text-xl font-black text-blue-700 flex items-center gap-2 border-l-4 border-blue-500 pl-3">สถิติแยกตามหน่วยงาน (สุขภาพจิต)</h2>
-             {renderTable(true)}
+           {/* PAGE 2: Behavior */}
+           <div className="w-[794px] min-h-[1123px] bg-white print-container p-12 text-slate-800 flex flex-col box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
+               <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-8 shrink-0">
+                  <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
+                  <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+                  <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+               </div>
+               
+               <div className="space-y-4 shrink-0 flex-grow">
+                 <h2 className="text-xl font-black text-emerald-700 flex items-center gap-2 border-l-4 border-emerald-500 pl-3 mb-6">รายงานข้อมูลพฤติกรรม (Behavior)</h2>
+                 {renderBehavior(true)}
+               </div>
+
+               <div className="mt-auto pt-6 border-t border-slate-100 shrink-0 text-center text-xs text-slate-400">
+                  เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร (หน้า 2/4)
+               </div>
            </div>
-           
-           <div className="space-y-6 shrink-0 pt-4 border-t border-slate-200">
-             <h2 className="text-xl font-black text-indigo-700 flex items-center gap-2 border-l-4 border-indigo-500 pl-3">วิเคราะห์แนวโน้ม และข้อเสนอแนะสำหรับผู้บริหาร</h2>
-             <div className="grid grid-cols-1 gap-4">
-                 {recommendations.map((rec, idx) => (
-                    <div key={idx} className="bg-slate-50 p-5 rounded-xl border border-slate-200 shadow-sm break-inside-avoid">
-                       <h4 className="font-bold text-slate-800 text-base mb-1">{rec.title}</h4>
-                       <p className="text-slate-600 text-[13px] leading-relaxed">{rec.text}</p>
-                    </div>
-                 ))}
-             </div>
+
+           {/* PAGE 3: Table (Summary by Affiliation) */}
+           <div className="w-[794px] min-h-[1123px] bg-white print-container p-12 text-slate-800 flex flex-col box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
+               <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-8 shrink-0">
+                  <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
+                  <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+                  <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+               </div>
+               
+               <div className="space-y-4 shrink-0 flex-grow">
+                 <h2 className="text-xl font-black text-blue-700 flex items-center gap-2 border-l-4 border-blue-500 pl-3 mb-6">สถิติแยกตามหน่วยงาน (สรุปยอด)</h2>
+                 {renderTable(true)}
+               </div>
+
+               <div className="mt-auto pt-6 border-t border-slate-100 shrink-0 text-center text-xs text-slate-400">
+                  เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร (หน้า 3/4)
+               </div>
            </div>
-           
-           <div className="text-center text-xs text-slate-400 pt-6 mt-8 border-t border-slate-100 shrink-0">
-              เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร
+
+           {/* PAGE 4: Policy & AI Analysis */}
+           <div className="w-[794px] min-h-[1123px] bg-white print-container p-12 text-slate-800 flex flex-col box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
+               <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-8 shrink-0">
+                  <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
+                  <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+                  <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+               </div>
+               
+               <div className="space-y-6 shrink-0 flex-grow">
+                 <h2 className="text-xl font-black text-indigo-700 flex items-center gap-2 border-l-4 border-indigo-500 pl-3 mb-6">บทวิเคราะห์แนวโน้ม และข้อเสนอแนะสำหรับผู้บริหาร</h2>
+                 
+                 <h3 className="font-bold text-slate-700 mt-4">บทวิเคราะห์ AI เชิงลึกรายประเด็น</h3>
+                 <div className="grid grid-cols-1 gap-3 mb-6">
+                     {aiInsightTexts.map((text, idx) => (
+                        <div key={idx} className="flex gap-3 items-start bg-slate-50 p-4 rounded-xl border border-slate-200 break-inside-avoid shadow-sm">
+                           <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0 text-xs">{idx + 1}</div>
+                           <p className="text-slate-700 text-xs leading-relaxed pt-1">{text}</p>
+                        </div>
+                     ))}
+                 </div>
+
+                 <h3 className="font-bold text-slate-700 mt-6">ข้อเสนอแนะนโยบายสำหรับผู้บริหาร</h3>
+                 <div className="grid grid-cols-1 gap-4">
+                     {recommendations.map((rec, idx) => (
+                        <div key={idx} className="bg-slate-50 p-5 rounded-xl border border-slate-200 shadow-sm break-inside-avoid">
+                           <h4 className="font-bold text-slate-800 text-sm mb-1">{rec.title}</h4>
+                           <p className="text-slate-600 text-[12px] leading-relaxed">{rec.text}</p>
+                        </div>
+                     ))}
+                 </div>
+               </div>
+               
+               <div className="mt-auto pt-6 border-t border-slate-100 shrink-0 text-center text-xs text-slate-400">
+                  เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร (หน้า 4/4)
+               </div>
            </div>
 
         </div>
