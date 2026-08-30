@@ -2382,7 +2382,9 @@ function EditUserModal({ user, onClose, onSave }) {
     accountType: user.accountType || 'student',
     affiliation: user.affiliation || '',
     status: user.status || 'approved',
-    password: user.password || ''
+    password: user.password || '',
+    gender: user.gender || '',
+    age: user.age || ''
   });
 
   const handleSave = () => {
@@ -2409,6 +2411,21 @@ function EditUserModal({ user, onClose, onSave }) {
           <div>
             <label className={labelClass}>รหัสผ่าน</label>
             <input type="text" className={inputClass} value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} placeholder="กำหนดรหัสผ่านใหม่" />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className={labelClass}>เพศ</label>
+              <select className={inputClass} value={formData.gender} onChange={e => setFormData({...formData, gender: e.target.value})}>
+                <option value="">ไม่ระบุ</option>
+                <option value="ชาย">ชาย</option>
+                <option value="หญิง">หญิง</option>
+                <option value="อื่นๆ">อื่นๆ</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>อายุ (ปี)</label>
+              <input type="number" className={inputClass} value={formData.age} onChange={e => setFormData({...formData, age: e.target.value})} placeholder="เช่น 15" />
+            </div>
           </div>
           <div>
             <label className={labelClass}>ประเภทบัญชี</label>
@@ -4416,6 +4433,121 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
     ? 'การแปรผล: ปัจจุบันยังไม่พบข้อมูลพฤติกรรมเสี่ยง' 
     : `การแปรผล: พฤติกรรมเสี่ยงที่พบมากที่สุดคือ "${maxNegative?.name || 'ไม่มีข้อมูล'}" (${maxNegative?.count} ครั้ง) ควรเฝ้าระวังอย่างใกล้ชิด`;
 
+  // --- DEMOGRAPHIC ANALYSIS ---
+  const demographicAnalysis = () => {
+    const validUsers = students.filter(u => u.gender || u.age);
+    if (validUsers.length === 0) return { hasData: false, insights: ["ยังไม่มีข้อมูลเพศและอายุในระบบ (ผู้ดูแลระบบสามารถเข้าไปแก้ไขข้อมูลผู้ใช้เพื่อเพิ่ม เพศ และ อายุ ได้)"] };
+    
+    // Process Gender Data
+    const byGender = { 'ชาย': { count: 0, st5Sum: 0, st5Count: 0, badBeh: 0, goodBeh: 0, st5Items: [0,0,0,0,0] }, 'หญิง': { count: 0, st5Sum: 0, st5Count: 0, badBeh: 0, goodBeh: 0, st5Items: [0,0,0,0,0] }, 'อื่นๆ': { count: 0, st5Sum: 0, st5Count: 0, badBeh: 0, goodBeh: 0, st5Items: [0,0,0,0,0] } };
+    let ageGroups = { 'ต่ำกว่า 15': { count: 0, st5Sum: 0, st5Count: 0, badBeh: 0, goodBeh: 0, st5Items: [0,0,0,0,0] }, '15-18': { count: 0, st5Sum: 0, st5Count: 0, badBeh: 0, goodBeh: 0, st5Items: [0,0,0,0,0] }, '19 ขึ้นไป': { count: 0, st5Sum: 0, st5Count: 0, badBeh: 0, goodBeh: 0, st5Items: [0,0,0,0,0] } };
+
+    validUsers.forEach(u => {
+       const uId = u.id;
+       const uSt5 = st5Linked.filter(d => d.uid === uId || d.userId === uId);
+       const uBeh = behaviorLinked.filter(d => d.targetUid === uId);
+       
+       let uSt5Score = 0;
+       let uSt5Answers = [0,0,0,0,0];
+       if (uSt5.length > 0) {
+           uSt5Score = uSt5.reduce((sum, val) => sum + parseInt(val.score || 0), 0) / uSt5.length;
+           // Find latest ST-5 for detailed item analysis
+           const latest = [...uSt5].sort((a, b) => b.timestamp - a.timestamp)[0];
+           if (latest.answers && latest.answers.length === 5) {
+               uSt5Answers = latest.answers;
+           }
+       }
+
+       let uBad = 0, uGood = 0;
+       uBeh.forEach(b => {
+           if (b.selections?.undesirable) uBad += b.selections.undesirable.length;
+           if (b.selections?.desirable) uGood += b.selections.desirable.length;
+       });
+
+       if (u.gender && byGender[u.gender]) {
+           byGender[u.gender].count++;
+           if (uSt5.length > 0) { 
+               byGender[u.gender].st5Sum += uSt5Score; 
+               byGender[u.gender].st5Count++; 
+               for(let i=0;i<5;i++) byGender[u.gender].st5Items[i] += uSt5Answers[i];
+           }
+           byGender[u.gender].badBeh += uBad;
+           byGender[u.gender].goodBeh += uGood;
+       }
+
+       if (u.age) {
+           const age = parseInt(u.age);
+           let group = '';
+           if (age < 15) group = 'ต่ำกว่า 15';
+           else if (age <= 18) group = '15-18';
+           else group = '19 ขึ้นไป';
+           
+           ageGroups[group].count++;
+           if (uSt5.length > 0) { 
+               ageGroups[group].st5Sum += uSt5Score; 
+               ageGroups[group].st5Count++; 
+               for(let i=0;i<5;i++) ageGroups[group].st5Items[i] += uSt5Answers[i];
+           }
+           ageGroups[group].badBeh += uBad;
+           ageGroups[group].goodBeh += uGood;
+       }
+    });
+
+    let insights = [];
+    const st5Questions = [
+      "มีปัญหาการนอน", "สมาธิน้อยลง", "หงุดหงิด/ว้าวุ่นใจ", "รู้สึกเบื่อ เซ็ง", "ไม่อยากพบปะผู้คน"
+    ];
+    
+    // Gender Insights
+    if (byGender['ชาย'].count > 0 && byGender['หญิง'].count > 0) {
+        const maleAvgSt5 = byGender['ชาย'].st5Count ? (byGender['ชาย'].st5Sum / byGender['ชาย'].st5Count).toFixed(1) : 0;
+        const femaleAvgSt5 = byGender['หญิง'].st5Count ? (byGender['หญิง'].st5Sum / byGender['หญิง'].st5Count).toFixed(1) : 0;
+        insights.push(`เพศสัมพันธ์กับความเครียด: เพศหญิงมีคะแนนความเครียดรวมเฉลี่ย (${femaleAvgSt5}) เทียบกับเพศชาย (${maleAvgSt5})`);
+
+        const maleAvgBad = byGender['ชาย'].count ? (byGender['ชาย'].badBeh / byGender['ชาย'].count).toFixed(1) : 0;
+        const femaleAvgBad = byGender['หญิง'].count ? (byGender['หญิง'].badBeh / byGender['หญิง'].count).toFixed(1) : 0;
+        insights.push(`เพศสัมพันธ์กับพฤติกรรม: เพศชายพบพฤติกรรมเสี่ยงเฉลี่ย (${maleAvgBad} พฤติกรรม/คน) เทียบกับเพศหญิง (${femaleAvgBad} พฤติกรรม/คน)`);
+        
+        // Detailed ST-5 by gender
+        let highestMaleItem = 0, highestMaleItemScore = 0;
+        let highestFemaleItem = 0, highestFemaleItemScore = 0;
+        for(let i=0;i<5;i++) {
+            const mScore = byGender['ชาย'].st5Count ? byGender['ชาย'].st5Items[i]/byGender['ชาย'].st5Count : 0;
+            const fScore = byGender['หญิง'].st5Count ? byGender['หญิง'].st5Items[i]/byGender['หญิง'].st5Count : 0;
+            if(mScore > highestMaleItemScore) { highestMaleItemScore = mScore; highestMaleItem = i; }
+            if(fScore > highestFemaleItemScore) { highestFemaleItemScore = fScore; highestFemaleItem = i; }
+        }
+        if (byGender['ชาย'].st5Count > 0) insights.push(`ปัญหาสุขภาพจิตรายข้อ (ชาย): พบปัญหา "${st5Questions[highestMaleItem]}" สูงที่สุด`);
+        if (byGender['หญิง'].st5Count > 0) insights.push(`ปัญหาสุขภาพจิตรายข้อ (หญิง): พบปัญหา "${st5Questions[highestFemaleItem]}" สูงที่สุด`);
+    }
+
+    // Age Insights
+    let maxStressAge = '';
+    let maxStressVal = 0;
+    let maxStressAgeItem = 0;
+    let maxStressAgeItemVal = 0;
+    Object.keys(ageGroups).forEach(k => {
+        if (ageGroups[k].st5Count > 0) {
+           const avg = ageGroups[k].st5Sum / ageGroups[k].st5Count;
+           if (avg > maxStressVal) { 
+               maxStressVal = avg; 
+               maxStressAge = k;
+               // Find worst item for this age group
+               for(let i=0;i<5;i++) {
+                   const itemAvg = ageGroups[k].st5Items[i]/ageGroups[k].st5Count;
+                   if (itemAvg > maxStressAgeItemVal) { maxStressAgeItemVal = itemAvg; maxStressAgeItem = i; }
+               }
+           }
+        }
+    });
+    if (maxStressAge && maxStressVal > 0) {
+        insights.push(`อายุสัมพันธ์กับความเครียด: ช่วงอายุ "${maxStressAge}" มีความเครียดสูงสุดเฉลี่ย (${maxStressVal.toFixed(1)} คะแนน) โดยมีปัญหาหลักรายข้อคือ "${st5Questions[maxStressAgeItem]}"`);
+    }
+
+    return { hasData: true, insights, summary: { gender: byGender, age: ageGroups } };
+  };
+  const demoData = demographicAnalysis();
+
   // --- AI INSIGHTS (Issue Specific) ---
   const generateAIInsights = () => {
     let insights = [];
@@ -4777,6 +4909,18 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                <div className="space-y-6">
                  <h3 className="text-lg font-black text-indigo-800 flex items-center gap-2 border-b border-indigo-100 pb-3">
+                   <Users size={24} /> บทวิเคราะห์ความสัมพันธ์ (เพศ/อายุ)
+                 </h3>
+                 <div className="space-y-4">
+                   {demoData.insights.map((text, idx) => (
+                      <div key={`demo-${idx}`} className="flex gap-4 items-start bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100">
+                         <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0">{idx + 1}</div>
+                         <p className="text-slate-700 text-sm leading-relaxed pt-1.5">{text}</p>
+                      </div>
+                   ))}
+                 </div>
+                 
+                 <h3 className="text-lg font-black text-indigo-800 flex items-center gap-2 border-b border-indigo-100 pb-3 mt-6">
                    <Bot size={24} /> บทวิเคราะห์ AI เชิงลึกรายประเด็น
                  </h3>
                  <div className="space-y-4">
@@ -4877,6 +5021,16 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
                <div className="space-y-6 shrink-0 flex-grow">
                  <h2 className="text-xl font-black text-indigo-700 flex items-center gap-2 border-l-4 border-indigo-500 pl-3 mb-6">บทวิเคราะห์แนวโน้ม และข้อเสนอแนะสำหรับผู้บริหาร</h2>
                  
+                 <h3 className="font-bold text-slate-700 mt-4">บทวิเคราะห์ความสัมพันธ์ประชากรศาสตร์ (เพศ และ อายุ)</h3>
+                 <div className="grid grid-cols-1 gap-3 mb-6">
+                     {demoData.insights.map((text, idx) => (
+                        <div key={`demo-${idx}`} className="flex gap-3 items-start bg-slate-50 p-4 rounded-xl border border-slate-200 break-inside-avoid shadow-sm">
+                           <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0 text-xs">{idx + 1}</div>
+                           <p className="text-slate-700 text-xs leading-relaxed pt-1">{text}</p>
+                        </div>
+                     ))}
+                 </div>
+
                  <h3 className="font-bold text-slate-700 mt-4">บทวิเคราะห์ AI เชิงลึกรายประเด็น</h3>
                  <div className="grid grid-cols-1 gap-3 mb-6">
                      {aiInsightTexts.map((text, idx) => (

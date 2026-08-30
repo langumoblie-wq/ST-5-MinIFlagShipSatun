@@ -1,0 +1,677 @@
+function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
+  const [reportTab, setReportTab] = useState('kpi');
+  const [isExporting, setIsExporting] = useState(false);
+  const printRef = useRef(null);
+
+  // --- Data Processing ---
+  const students = users.filter(u => ['student', 'community'].includes(u.accountType) || u.role === 'user');
+  const studentIds = new Set(students.map(u => u.id));
+  
+  // Link evaluations to students
+  const st5Linked = st5Data.filter(d => studentIds.has(d.uid) || studentIds.has(d.userId));
+  const behaviorLinked = behaviorData.filter(d => studentIds.has(d.targetUid));
+  
+  // ยอดคัดกรอง (Unique Screened Users)
+  const uniqueScreenedUsers = new Set([
+    ...st5Linked.map(d => d.uid || d.userId),
+    ...behaviorLinked.map(d => d.targetUid)
+  ]);
+  const totalScreenedStudents = uniqueScreenedUsers.size;
+
+  const totalEvaluations = st5Linked.length + behaviorLinked.length;
+  
+  const st5Risk = st5Linked.filter(d => ['เครียดสูง', 'เครียดรุนแรง'].includes(d.level) || parseInt(d.score) >= 8);
+  const uniqueRiskUsers = new Set(st5Risk.map(d => d.uid || d.userId));
+  
+  const riskPercentage = totalScreenedStudents > 0 ? ((uniqueRiskUsers.size / totalScreenedStudents) * 100).toFixed(1) : '0';
+
+  const affiliations = [...new Set(students.map(u => u.affiliation).filter(Boolean))];
+
+  // Table Data & Sorting
+  const tableData = affiliations.map(aff => {
+    const affStudents = students.filter(s => s.affiliation === aff);
+    const affStudentIds = new Set(affStudents.map(s => s.id));
+    
+    const affSt5 = st5Linked.filter(d => affStudentIds.has(d.uid) || affStudentIds.has(d.userId));
+    const affBehaviors = behaviorLinked.filter(d => affStudentIds.has(d.targetUid));
+    
+    // Unique screened in this affiliation
+    const affUniqueScreened = new Set([
+      ...affSt5.map(d => d.uid || d.userId),
+      ...affBehaviors.map(d => d.targetUid)
+    ]).size;
+    
+    const affRisk = affSt5.filter(d => ['เครียดสูง', 'เครียดรุนแรง'].includes(d.level) || parseInt(d.score) >= 8);
+    const affUniqueRisk = new Set(affRisk.map(d => d.uid || d.userId)).size;
+    
+    let goodBehCount = 0;
+    let badBehCount = 0;
+    affBehaviors.forEach(beh => {
+      if (beh.selections && beh.selections.desirable && beh.selections.desirable.length > 0) goodBehCount++;
+      if (beh.selections && beh.selections.undesirable && beh.selections.undesirable.length > 0) badBehCount++;
+    });
+    
+    return { 
+      name: aff, 
+      students: affUniqueScreened, 
+      evaluations: affSt5.length + affBehaviors.length, 
+      risk: affUniqueRisk,
+      goodBeh: goodBehCount,
+      badBeh: badBehCount
+    };
+  }).sort((a, b) => b.students - a.students);
+
+  // ST-5 Chart Data (Aligned with Executive Dashboard - latest evaluation per user)
+  let riskCounts = {
+    'Low': 0,
+    'Medium': 0,
+    'High': 0,
+    'Severe': 0
+  };
+  let validSt5Count = 0;
+
+  students.forEach(user => {
+    const uSt5 = st5Linked.filter(s => s.uid === user.id || s.userId === user.id);
+    if (uSt5.length > 0) {
+      const latestScore = uSt5[0].score;
+      const risk = calculateST5(latestScore).risk;
+      if (riskCounts[risk] !== undefined) {
+        riskCounts[risk]++;
+        validSt5Count++;
+      }
+    }
+  });
+
+  const st5PieData = [
+    { name: 'เครียดน้อย (ปกติ)', value: riskCounts['Low'], fill: '#10b981' },
+    { name: 'เครียดปานกลาง', value: riskCounts['Medium'], fill: '#facc15' },
+    { name: 'เครียดสูง', value: riskCounts['High'], fill: '#f97316' },
+    { name: 'เครียดรุนแรง', value: riskCounts['Severe'], fill: '#ef4444' }
+  ].filter(d => d.value > 0);
+  
+  const maxSt5Level = st5PieData.length > 0 ? st5PieData.reduce((max, current) => current.value > (max?.value || 0) ? current : max, st5PieData[0]) : null;
+  const st5PieInterpretation = validSt5Count === 0 
+    ? 'การแปรผล: ยังไม่มีข้อมูลการประเมิน ST-5'
+    : `การแปรผล: เยาวชนส่วนใหญ่อยู่ในกลุ่ม "${maxSt5Level?.name || 'ไม่มีข้อมูล'}" คิดเป็น ${Math.round((maxSt5Level?.value / validSt5Count) * 100)}% ของผู้รับการประเมินทั้งหมด`;
+
+  const barData = tableData.slice(0, 5);
+  const maxAffiliation = barData[0];
+  const barInterpretation = maxAffiliation 
+    ? `การแปรผล: องค์กร/สถานที่ที่มีเยาวชนเข้ารับการประเมินสูงสุดคือ "${maxAffiliation.name}" (จำนวน ${maxAffiliation.students} คน) ควรจัดสรรทรัพยากรพี่เลี้ยงให้เหมาะสมกับสัดส่วนนี้`
+    : 'การแปรผล: ยังไม่มีข้อมูลจำนวนเยาวชนในระบบ';
+
+
+  // AI Policy Recommendations
+  const generateRecommendations = () => {
+      let recs = [];
+      if (parseFloat(riskPercentage) > 15) {
+          recs.push({ title: "🚨 การแทรกแซงเร่งด่วน (Urgent Intervention)", text: "พบสัดส่วนเยาวชนกลุ่มเสี่ยงสูงมากกว่า 15% ควรเร่งประสานผู้เชี่ยวชาญเพื่อจัดกิจกรรมกลุ่มบำบัดด่วนในพื้นที่ที่มีกลุ่มเสี่ยงหนาแน่น" });
+      } else {
+          recs.push({ title: "🛡️ การรักษาระดับ (Maintenance)", text: "สัดส่วนความเครียดอยู่ในเกณฑ์ที่ควบคุมได้ ควรจัดกิจกรรมส่งเสริมสุขภาพจิตเชิงบวกอย่างต่อเนื่องเพื่อสร้างภูมิคุ้มกันทางใจให้เยาวชน" });
+      }
+      recs.push({ title: "📊 การติดตามผล (Monitoring)", text: "เน้นย้ำให้พี่เลี้ยงโครงการประเมิน ST-5 ซ้ำในกลุ่มเสี่ยงทุกๆ 2 สัปดาห์ เพื่อติดตามแนวโน้มและการตอบสนองต่อการช่วยเหลืออย่างใกล้ชิด" });
+      return recs;
+  };
+  const recommendations = generateRecommendations();
+
+  // --- ADD BEHAVIOR LOGIC ---
+  const posBehaviorsList = [
+    "การใฝ่เรียนรู้", "การคิดวิเคราะห์", "การแก้ปัญหา", 
+    "การควบคุมอารมณ์", "ความเห็นอกเห็นใจผู้อื่น", "ความภาคภูมิใจในตนเอง", 
+    "ความรับผิดชอบและวินัย", "จิตสาธารณะ", "การดูแลสุขภาพกาย"
+  ];
+  
+  const negBehaviorsList = [
+    "การใช้ความรุนแรงและรังแกกัน (Bullying)", 
+    "การก่อความเดือดร้อนรำคาญ",
+    "การใช้สารเสพติด", 
+    "การพนัน", 
+    "พฤติกรรมทางเพศที่ไม่ปลอดภัย",
+    "ภาวะซึมเศร้าและวิตกกังวล",
+    "อารมณ์ฉุนเฉียวและก้าวร้าว",
+    "การหนีเรียน", 
+    "พฤติกรรมถดถอยในการเรียน",
+    "การหมกมุ่นกับสื่อออนไลน์"
+  ];
+
+  let badCategories = {};
+  let goodCategories = {};
+  behaviorLinked.forEach(beh => {
+    if (beh.selections && beh.selections.undesirable) {
+      beh.selections.undesirable.forEach(item => { badCategories[item] = (badCategories[item] || 0) + 1; });
+    }
+    if (beh.selections && beh.selections.desirable) {
+      beh.selections.desirable.forEach(item => { goodCategories[item] = (goodCategories[item] || 0) + 1; });
+    }
+  });
+
+  const radarData = posBehaviorsList.map(item => ({
+    subject: item.replace('การ', '').replace('ความ', ''), 
+    A: goodCategories[item] || 0,
+    fullMark: totalScreenedStudents || 1
+  }));
+  const radarMaxPos = Math.max(...radarData.map(d => d.A));
+  const radarDomainMax = radarMaxPos === 0 ? 1 : 'dataMax';
+
+  const negativeChartData = negBehaviorsList.map(item => {
+    let shortName = item;
+    if (item === "การใช้ความรุนแรงและรังแกกัน (Bullying)") shortName = "Bullying";
+    else if (item === "การก่อความเดือดร้อนรำคาญ") shortName = "เดือดร้อนรำคาญ";
+    else if (item === "การใช้สารเสพติด") shortName = "สารเสพติด";
+    else if (item === "การพนัน") shortName = "พนัน";
+    else if (item === "พฤติกรรมทางเพศที่ไม่ปลอดภัย") shortName = "พฤติกรรมทางเพศ";
+    else if (item === "ภาวะซึมเศร้าและวิตกกังวล") shortName = "ซึมเศร้า/วิตกกังวล";
+    else if (item === "อารมณ์ฉุนเฉียวและก้าวร้าว") shortName = "ก้าวร้าว";
+    else if (item === "การหนีเรียน") shortName = "หนีเรียน";
+    else if (item === "พฤติกรรมถดถอยในการเรียน") shortName = "เรียนถดถอย";
+    else if (item === "การหมกมุ่นกับสื่อออนไลน์") shortName = "ติดสื่อออนไลน์";
+      
+    return {
+      name: shortName,
+      count: badCategories[item] || 0
+    };
+  }).sort((a, b) => b.count - a.count);
+  
+  const maxPositive = radarData.reduce((max, current) => current.A > (max?.A || 0) ? current : max, radarData[0]);
+  const positiveInterpretation = radarMaxPos === 0 
+    ? 'การแปรผล: ปัจจุบันยังไม่พบข้อมูลพฤติกรรมเชิงบวก' 
+    : `การแปรผล: จุดแข็งที่พบมากที่สุดคือ "${maxPositive?.subject || 'ไม่มีข้อมูล'}" ควรส่งเสริมเพื่อเป็นปัจจัยปกป้อง`;
+
+  const maxNegative = negativeChartData[0];
+  const negativeInterpretation = maxNegative?.count === 0 
+    ? 'การแปรผล: ปัจจุบันยังไม่พบข้อมูลพฤติกรรมเสี่ยง' 
+    : `การแปรผล: พฤติกรรมเสี่ยงที่พบมากที่สุดคือ "${maxNegative?.name || 'ไม่มีข้อมูล'}" (${maxNegative?.count} ครั้ง) ควรเฝ้าระวังอย่างใกล้ชิด`;
+
+  // --- AI INSIGHTS (Issue Specific) ---
+  const generateAIInsights = () => {
+    let insights = [];
+    if (totalScreenedStudents < 5) return ["ข้อมูลยังไม่เพียงพอสำหรับการวิเคราะห์เชิงลึกด้วย AI (ต้องการข้อมูลอย่างน้อย 5 เคส)"];
+    
+    // Insight 1: Physical Health vs Gaming/Stress
+    const lowHealthCount = radarData.find(d => d.subject === "ดูแลสุขภาพกาย")?.A || 0;
+    const gamingCount = negativeChartData.find(d => d.name === "ติดสื่อออนไลน์")?.count || 0;
+    if (lowHealthCount === 0 && gamingCount > 0) {
+        insights.push(`พบความเชื่อมโยงน่าสนใจ: มีแนวโน้มที่เยาวชนขาดการดูแลสุขภาพกายจะสัมพันธ์กับพฤติกรรมติดสื่อออนไลน์ (${gamingCount} เคส)`);
+    }
+
+    // Insight 2: Self-esteem vs Bullying
+    const esteemCount = radarData.find(d => d.subject === "ภาคภูมิใจในตนเอง")?.A || 0;
+    const bullyingCount = negativeChartData.find(d => d.name === "Bullying")?.count || 0;
+    if (esteemCount === 0 && bullyingCount > 0) {
+        insights.push(`พฤติกรรมการรังแกกัน (Bullying) ${bullyingCount} เคส มักเกิดควบคู่กับการขาดความภาคภูมิใจในตนเอง`);
+    }
+
+    if (insights.length === 0) {
+      insights.push("ระดับสุขภาพจิตและพฤติกรรมของประชากรกลุ่มนี้ยังอยู่ในเกณฑ์ที่ควบคุมได้ดี ไม่มีสัญญาณเตือนภัยเชิงพฤติกรรมร่วมที่น่ากังวลแบบก้าวกระโดด");
+    }
+
+    return insights;
+  };
+  const aiInsightTexts = generateAIInsights();
+
+
+  // Export PDF Logic
+  // Export PDF Logic
+  // Export PDF Logic
+  const handleExportPDF = async () => {
+    if (!printRef.current) return;
+    setIsExporting(true);
+    try {
+      const element = printRef.current;
+      
+      // Temporarily show the element to capture it (move it to viewable area)
+      const originalPosition = element.style.position;
+      const originalTop = element.style.top;
+      const originalLeft = element.style.left;
+      const originalZIndex = element.style.zIndex;
+      const originalPointer = element.style.pointerEvents;
+      
+      // Bring to front but keep it mostly out of the way to avoid UI flicker if possible,
+      // but it MUST be within the viewport or at least rendered.
+      element.style.position = 'absolute';
+      element.style.top = '0px';
+      element.style.left = '0px';
+      element.style.zIndex = '9999';
+      element.style.pointerEvents = 'auto';
+      
+      // Wait for React to render and fonts to load
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+
+      
+      // Hide it again
+      element.style.position = originalPosition;
+      element.style.top = originalTop;
+      element.style.left = originalLeft;
+      element.style.zIndex = originalZIndex;
+      element.style.pointerEvents = originalPointer;
+      
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+
+      const pages = Array.from(element.children);
+      
+      for (let i = 0; i < pages.length; i++) {
+        const pageEl = pages[i];
+        const pageCanvas = await toPng(pageEl, { 
+          quality: 1.0, 
+          backgroundColor: '#ffffff', 
+          pixelRatio: 2, 
+          width: 794 
+        });
+        
+        const pageImgHeight = (pageEl.offsetHeight * pdfWidth) / 794;
+        
+        if (i > 0) pdf.addPage();
+        
+        // If content is longer than A4, scale it down to fit one page.
+        // Otherwise, draw it at natural size.
+        const finalHeight = pageImgHeight > pageHeight ? pageHeight : pageImgHeight;
+        
+        pdf.addImage(pageCanvas, 'PNG', 0, 0, pdfWidth, finalHeight);
+      }
+      
+      pdf.save(`Executive_Report_${new Date().getTime()}.pdf`);
+    } catch (err) {
+      console.error(err);
+      alert('เกิดข้อผิดพลาดในการสร้าง PDF');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const renderKPIs = (isPrint = false) => (
+      <>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className={`bg-blue-50 ${isPrint ? 'p-2' : 'p-4'} rounded-2xl border border-blue-100 text-center shadow-sm`}>
+            <div className="text-blue-500 mb-1 flex justify-center"><Users size={isPrint ? 20 : 28} /></div>
+            <div className={`${isPrint ? 'text-2xl' : 'text-3xl'} font-black text-blue-700`}>{totalScreenedStudents}</div>
+            <div className={`${isPrint ? 'text-[10px]' : 'text-xs'} font-bold text-blue-600 mt-1`}>ยอดคัดกรอง (คน)</div>
+          </div>
+          <div className={`bg-emerald-50 ${isPrint ? 'p-2' : 'p-4'} rounded-2xl border border-emerald-100 text-center shadow-sm`}>
+            <div className="text-emerald-500 mb-1 flex justify-center"><BarChart3 size={isPrint ? 20 : 28} /></div>
+            <div className={`${isPrint ? 'text-2xl' : 'text-3xl'} font-black text-emerald-700`}>{totalEvaluations}</div>
+            <div className={`${isPrint ? 'text-[10px]' : 'text-xs'} font-bold text-emerald-600 mt-1`}>การประเมินรวม (ครั้ง)</div>
+          </div>
+          <div className={`bg-rose-50 ${isPrint ? 'p-2' : 'p-4'} rounded-2xl border border-rose-100 text-center shadow-sm`}>
+            <div className="text-rose-500 mb-1 flex justify-center"><AlertCircle size={isPrint ? 20 : 28} /></div>
+            <div className={`${isPrint ? 'text-2xl' : 'text-3xl'} font-black text-rose-700`}>{uniqueRiskUsers.size}</div>
+            <div className={`${isPrint ? 'text-[10px]' : 'text-xs'} font-bold text-rose-600 mt-1`}>พบกลุ่มเสี่ยง (คน)</div>
+          </div>
+          <div className={`bg-purple-50 ${isPrint ? 'p-2' : 'p-4'} rounded-2xl border border-purple-100 text-center shadow-sm`}>
+            <div className="text-purple-500 mb-1 flex justify-center"><TrendingUp size={isPrint ? 20 : 28} /></div>
+            <div className={`${isPrint ? 'text-2xl' : 'text-3xl'} font-black text-purple-700`}>{riskPercentage}%</div>
+            <div className={`${isPrint ? 'text-[10px]' : 'text-xs'} font-bold text-purple-600 mt-1`}>สัดส่วนกลุ่มเสี่ยง</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+          <div className="space-y-4">
+            <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
+              <PieChart size={18} className="text-indigo-500" /> สัดส่วนระดับความเครียด
+            </h3>
+            <div className="h-64 bg-slate-50/50 rounded-2xl p-2 border border-slate-100 flex items-center justify-center">
+              {isPrint ? (
+                <RechartsPieChart width={300} height={250}>
+                  <Pie data={st5PieData} cx={150} cy={120} innerRadius={45} outerRadius={70} paddingAngle={2} dataKey="value" label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} style={{fontSize: '11px', fontWeight: 'bold'}} isAnimationActive={false}>
+                    {st5PieData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                </RechartsPieChart>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <RechartsPieChart>
+                    <Pie data={st5PieData} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={2} dataKey="value" label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} style={{fontSize: '11px', fontWeight: 'bold'}} isAnimationActive={false}>
+                      {st5PieData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.fill} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </RechartsPieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 text-center px-4">กราฟแสดงสัดส่วนระดับความเครียดของเยาวชน (อ้างอิงจากผลการประเมินล่าสุดของแต่ละบุคคล) โดยแบ่งตามเกณฑ์ของกรมสุขภาพจิต</p>
+            <div className={`mt-4 p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 ${isPrint ? '!p-2 !mt-2' : ''}`}>
+              <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-indigo-800`}>{st5PieInterpretation}</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
+              <BarChart2 size={18} className="text-teal-500" /> 5 องค์กรที่มีเยาวชนสูงสุด
+            </h3>
+            <div className="h-64 bg-slate-50/50 rounded-2xl p-2 border border-slate-100 flex items-center justify-center">
+              {isPrint ? (
+                <BarChart width={300} height={250} data={barData} margin={{ top: 10, right: 10, left: -20, bottom: 25 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="name" tick={{fontSize: 10, fill: '#64748b'}} angle={-45} textAnchor="end" interval={0} />
+                  <YAxis tick={{fontSize: 11, fill: '#64748b'}} />
+                  <Bar dataKey="students" name="เยาวชน (คน)" fill="#3b82f6" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                </BarChart>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={barData} margin={{ top: 10, right: 10, left: -20, bottom: 25 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="name" tick={{fontSize: 10, fill: '#64748b'}} angle={-45} textAnchor="end" interval={0} />
+                    <YAxis tick={{fontSize: 11, fill: '#64748b'}} />
+                    <Tooltip cursor={{fill: '#f8fafc'}} />
+                    <Bar dataKey="students" name="เยาวชน (คน)" fill="#3b82f6" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 text-center px-4">กราฟแสดง 5 หน่วยงานที่มีจำนวนเยาวชนที่ได้รับการคัดกรองมากที่สุด เพื่อใช้วางแผนการลงพื้นที่</p>
+            <div className={`mt-4 p-4 bg-teal-50/50 rounded-2xl border border-teal-100 ${isPrint ? '!p-2 !mt-2' : ''}`}>
+              <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-teal-800`}>{barInterpretation}</p>
+            </div>
+          </div>
+        </div>
+      </>
+  );
+
+  const renderBehavior = (isPrint = false) => (
+      <div className="grid lg:grid-cols-2 gap-6 pt-2">
+            {/* Radar Chart (Positive Behaviors) */}
+            <div className="space-y-4">
+              <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
+                <CheckCircle2 size={18} className="text-teal-400"/> Positive Behavior Radar
+              </h3>
+              <div className="bg-slate-50/50 p-2 rounded-2xl border border-slate-100 flex flex-col items-center">
+                <p className="text-[10px] text-slate-400 w-full mb-1 text-center">จุดแข็งและศักยภาพของเป้าหมาย (Protective Factors)</p>
+                <div className="w-full h-64">
+                  {isPrint ? (
+                    <RadarChart cx={150} cy={120} outerRadius={70} width={300} height={250} data={radarData}>
+                      <PolarGrid stroke="#e2e8f0" />
+                      <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }} />
+                      <PolarRadiusAxis angle={30} domain={[0, radarDomainMax]} tick={false} axisLine={false}/>
+                      <Radar name="ความถี่พฤติกรรมเชิงบวก" dataKey="A" stroke="#14b8a6" fill="#14b8a6" fillOpacity={radarMaxPos === 0 ? 0 : 0.4} strokeOpacity={radarMaxPos === 0 ? 0 : 1} isAnimationActive={false} />
+                    </RadarChart>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
+                        <PolarGrid stroke="#e2e8f0" />
+                        <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }} />
+                        <PolarRadiusAxis angle={30} domain={[0, radarDomainMax]} tick={false} axisLine={false}/>
+                        <Radar name="ความถี่พฤติกรรมเชิงบวก" dataKey="A" stroke="#14b8a6" fill="#14b8a6" fillOpacity={radarMaxPos === 0 ? 0 : 0.4} strokeOpacity={radarMaxPos === 0 ? 0 : 1} />
+                        <Tooltip contentStyle={{borderRadius: '12px', border: 'none'}}/>
+                      </RadarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </div>
+              <div className={`mt-2 p-4 bg-teal-50/50 rounded-2xl border border-teal-100 ${isPrint ? '!p-2 !mt-1' : ''}`}>
+                <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-teal-800`}>{positiveInterpretation}</p>
+              </div>
+            </div>
+
+            {/* Negative Behavior */}
+            <div className="space-y-4">
+               <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
+                 <AlertCircle size={18} className="text-rose-400"/> Negative Behavior Distribution
+               </h3>
+               <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 flex flex-col justify-center h-[282px]">
+                 <p className="text-[10px] text-slate-400 w-full mb-3 text-center">จัดอันดับความถี่ของพฤติกรรมเสี่ยงและปัญหา (Risk Factors)</p>
+                 <div className="space-y-3 overflow-y-auto pr-2">
+                    {negativeChartData.slice(0, 5).map((item, idx) => {
+                      const maxCount = negativeChartData[0]?.count || 1;
+                      const pct = (item.count / maxCount) * 100;
+                      let barColor = "bg-rose-500";
+                      if (idx > 0 && pct < 70) barColor = "bg-orange-400";
+                      if (idx > 2 && pct < 40) barColor = "bg-amber-300";
+                      if (item.count === 0) barColor = "bg-slate-200";
+
+                      return (
+                        <div key={idx} className="relative">
+                          <div className="flex justify-between text-[11px] font-bold text-slate-700 mb-1 relative z-10 px-1">
+                             <span>{idx + 1}. {item.name}</span>
+                             <span>{item.count > 0 ? `${item.count} ครั้ง` : '-'}</span>
+                          </div>
+                          <div className="w-full bg-slate-100 h-5 rounded-md overflow-hidden relative">
+                            <div className={`h-full ${barColor} ${isPrint ? '' : 'transition-all duration-1000'}`} style={{ width: `${item.count === 0 ? 0 : Math.max(pct, 5)}%` }}></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                 </div>
+               </div>
+               <div className={`mt-2 p-4 bg-rose-50/50 rounded-2xl border border-rose-100 ${isPrint ? '!p-2 !mt-1' : ''}`}>
+                 <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-rose-800`}>{negativeInterpretation}</p>
+               </div>
+            </div>
+      </div>
+  );
+
+  const renderTable = (isPrint = false) => {
+        const sortedByRisk = [...tableData].sort((a, b) => b.risk - a.risk);
+        const topRiskAffil = sortedByRisk[0];
+        const tableInterpretation = topRiskAffil && topRiskAffil.risk > 0 
+          ? `การแปรผล: องค์กร/สถานที่ที่มีเยาวชนกลุ่มเสี่ยงสูงสุดคือ "${topRiskAffil.name}" (จำนวน ${topRiskAffil.risk} คน) ควรจัดลำดับความสำคัญในการลงพื้นที่และจัดกิจกรรม Intervention ให้กับสถานที่นี้เป็นอันดับแรก`
+          : 'การแปรผล: ปัจจุบันยังไม่พบเยาวชนกลุ่มเสี่ยงในระบบ';
+          
+        return (
+        <div className="space-y-4">
+          <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
+            <Layers size={18} className="text-blue-500" /> ข้อมูลแยกตามสังกัด
+          </h3>
+          <p className="text-sm text-slate-500 mb-2">ตารางสรุปยอดการคัดกรองพฤติกรรมและความเครียดของเยาวชนในแต่ละสถานศึกษา/ชุมชน พร้อมสัดส่วนกลุ่มเสี่ยงที่ต้องเฝ้าระวัง</p>
+          <div className={`${isPrint ? '' : 'overflow-x-auto'} rounded-xl border border-slate-200 shadow-sm`}>
+            <table className={`w-full ${isPrint ? 'text-xs' : 'text-sm'} text-left`}>
+              <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                <tr>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'}`}>หน่วยงาน/สถานศึกษา</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center`}>เยาวชน</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center`}>ประเมิน ST-5</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center text-rose-600`}>พบกลุ่มเสี่ยง</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center text-teal-600`}>ประเมินพฤติกรรมบวก</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center text-orange-600`}>ประเมินพฤติกรรมลบ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {tableData.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} font-medium text-slate-800`}>{row.name}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center font-medium`}>{row.students}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center text-slate-500`}>{row.evaluations}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center font-bold text-rose-600`}>{row.risk}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center font-bold text-teal-600`}>{row.goodBeh}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center font-bold text-orange-600`}>{row.badBeh}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className={`mt-4 p-4 bg-orange-50/50 rounded-2xl border border-orange-100 ${isPrint ? '!p-2 !mt-2' : ''}`}>
+            <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-orange-800`}>{tableInterpretation}</p>
+          </div>
+        </div>
+  );}
+
+  return (
+    <div className="space-y-6 max-w-5xl mx-auto">
+      {/* Header & Export Button */}
+      <div className="flex flex-col md:flex-row justify-between items-center bg-white p-5 md:p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
+        <div className="text-center md:text-left">
+          <h2 className="text-2xl font-black text-slate-800">รายงานสำหรับผู้บริหาร</h2>
+          <p className="text-slate-500 text-sm mt-1">ข้อมูลเชิงลึกและบทสรุป (Executive Summary)</p>
+        </div>
+        <button onClick={handleExportPDF} disabled={isExporting} className="w-full md:w-auto bg-slate-800 hover:bg-slate-700 text-white px-6 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md transition-all">
+          {isExporting ? <RefreshCw className="animate-spin" size={18} /> : <FileText size={18} />}
+          {isExporting ? 'กำลังประมวลผล PDF...' : 'ส่งออก PDF ฉบับสมบูรณ์'}
+        </button>
+      </div>
+
+      {/* Interactive Tabs Menu */}
+      <div className="flex overflow-x-auto bg-slate-50 p-1.5 rounded-3xl border border-slate-100 shadow-inner hide-on-print snap-x">
+        <button onClick={() => setReportTab('kpi')} className={`flex-1 py-3 px-4 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold transition-all whitespace-nowrap snap-center ${reportTab === 'kpi' ? 'bg-white text-pink-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+            <LayoutDashboard size={18} /> สรุปภาพรวม (KPIs)
+        </button>
+        <button onClick={() => setReportTab('mental')} className={`flex-1 py-3 px-4 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold transition-all whitespace-nowrap snap-center ${reportTab === 'mental' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+            <Activity size={18} /> สุขภาพจิต (Mental)
+        </button>
+        <button onClick={() => setReportTab('behavior')} className={`flex-1 py-3 px-4 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold transition-all whitespace-nowrap snap-center ${reportTab === 'behavior' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+            <Users size={18} /> พฤติกรรม (Behavior)
+        </button>
+        <button onClick={() => setReportTab('policy')} className={`flex-1 py-3 px-4 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold transition-all whitespace-nowrap snap-center ${reportTab === 'policy' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+            <Bot size={18} /> บทวิเคราะห์ AI & นโยบาย
+        </button>
+      </div>
+
+      {/* Interactive Content Area */}
+      <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-slate-100">
+         {reportTab === 'kpi' && (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+               {renderKPIs()}
+            </div>
+         )}
+         
+         {reportTab === 'mental' && (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+               {renderTable()}
+            </div>
+         )}
+
+         {reportTab === 'behavior' && (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+               {renderBehavior()}
+            </div>
+         )}
+
+         {reportTab === 'policy' && (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+               <div className="space-y-6">
+                 <h3 className="text-lg font-black text-indigo-800 flex items-center gap-2 border-b border-indigo-100 pb-3">
+                   <Bot size={24} /> บทวิเคราะห์ AI เชิงลึกรายประเด็น
+                 </h3>
+                 <div className="space-y-4">
+                   {aiInsightTexts.map((text, idx) => (
+                      <div key={idx} className="flex gap-4 items-start bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100">
+                         <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0">{idx + 1}</div>
+                         <p className="text-slate-700 text-sm leading-relaxed pt-1.5">{text}</p>
+                      </div>
+                   ))}
+                 </div>
+               </div>
+
+               <div className="space-y-6">
+                 <h3 className="text-lg font-black text-blue-800 flex items-center gap-2 border-b border-blue-100 pb-3">
+                   <Lightbulb size={24} /> ข้อเสนอแนะนโยบายสำหรับผู้บริหาร
+                 </h3>
+                 <div className="space-y-4">
+                   {recommendations.map((rec, idx) => (
+                      <div key={idx} className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100">
+                         <h4 className="font-bold text-blue-700 mb-2">{rec.title}</h4>
+                         <p className="text-slate-700 text-sm leading-relaxed">{rec.text}</p>
+                      </div>
+                   ))}
+                 </div>
+               </div>
+            </div>
+         )}
+      </div>
+
+      {/* ---------------------------------------------------------
+          HIDDEN PRINTABLE VIEW (Continuous layout for PDF Export) 
+          --------------------------------------------------------- */}
+      <div className="fixed top-[9999px] left-[9999px] w-[794px] pointer-events-none z-[-100]">
+        <div ref={printRef} className="w-[794px] flex flex-col">
+            
+           {/* PAGE 1: KPIs & Mental */}
+           <div className="w-[794px] min-h-[1123px] bg-white print-container p-12 text-slate-800 flex flex-col box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
+               <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-8 shrink-0">
+                  <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
+                  <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+                  <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+               </div>
+               
+               <div className="space-y-4 shrink-0 flex-grow">
+                 <h2 className="text-xl font-black text-pink-700 flex items-center gap-2 border-l-4 border-pink-500 pl-3 mb-6">สรุปภาพรวม (KPIs) และ สุขภาพจิต (Mental)</h2>
+                 {renderKPIs(true)}
+               </div>
+
+               <div className="mt-auto pt-6 border-t border-slate-100 shrink-0 text-center text-xs text-slate-400">
+                  เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร (หน้า 1/4)
+               </div>
+           </div>
+
+           {/* PAGE 2: Behavior */}
+           <div className="w-[794px] min-h-[1123px] bg-white print-container p-12 text-slate-800 flex flex-col box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
+               <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-8 shrink-0">
+                  <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
+                  <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+                  <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+               </div>
+               
+               <div className="space-y-4 shrink-0 flex-grow">
+                 <h2 className="text-xl font-black text-emerald-700 flex items-center gap-2 border-l-4 border-emerald-500 pl-3 mb-6">รายงานข้อมูลพฤติกรรม (Behavior)</h2>
+                 {renderBehavior(true)}
+               </div>
+
+               <div className="mt-auto pt-6 border-t border-slate-100 shrink-0 text-center text-xs text-slate-400">
+                  เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร (หน้า 2/4)
+               </div>
+           </div>
+
+           {/* PAGE 3: Table (Summary by Affiliation) */}
+           <div className="w-[794px] min-h-[1123px] bg-white print-container p-12 text-slate-800 flex flex-col box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
+               <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-8 shrink-0">
+                  <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
+                  <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+                  <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+               </div>
+               
+               <div className="space-y-4 shrink-0 flex-grow">
+                 <h2 className="text-xl font-black text-blue-700 flex items-center gap-2 border-l-4 border-blue-500 pl-3 mb-6">สถิติแยกตามหน่วยงาน (สรุปยอด)</h2>
+                 {renderTable(true)}
+               </div>
+
+               <div className="mt-auto pt-6 border-t border-slate-100 shrink-0 text-center text-xs text-slate-400">
+                  เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร (หน้า 3/4)
+               </div>
+           </div>
+
+           {/* PAGE 4: Policy & AI Analysis */}
+           <div className="w-[794px] min-h-[1123px] bg-white print-container p-12 text-slate-800 flex flex-col box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
+               <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-8 shrink-0">
+                  <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
+                  <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+                  <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+               </div>
+               
+               <div className="space-y-6 shrink-0 flex-grow">
+                 <h2 className="text-xl font-black text-indigo-700 flex items-center gap-2 border-l-4 border-indigo-500 pl-3 mb-6">บทวิเคราะห์แนวโน้ม และข้อเสนอแนะสำหรับผู้บริหาร</h2>
+                 
+                 <h3 className="font-bold text-slate-700 mt-4">บทวิเคราะห์ AI เชิงลึกรายประเด็น</h3>
+                 <div className="grid grid-cols-1 gap-3 mb-6">
+                     {aiInsightTexts.map((text, idx) => (
+                        <div key={idx} className="flex gap-3 items-start bg-slate-50 p-4 rounded-xl border border-slate-200 break-inside-avoid shadow-sm">
+                           <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0 text-xs">{idx + 1}</div>
+                           <p className="text-slate-700 text-xs leading-relaxed pt-1">{text}</p>
+                        </div>
+                     ))}
+                 </div>
+
+                 <h3 className="font-bold text-slate-700 mt-6">ข้อเสนอแนะนโยบายสำหรับผู้บริหาร</h3>
+                 <div className="grid grid-cols-1 gap-4">
+                     {recommendations.map((rec, idx) => (
+                        <div key={idx} className="bg-slate-50 p-5 rounded-xl border border-slate-200 shadow-sm break-inside-avoid">
+                           <h4 className="font-bold text-slate-800 text-sm mb-1">{rec.title}</h4>
+                           <p className="text-slate-600 text-[12px] leading-relaxed">{rec.text}</p>
+                        </div>
+                     ))}
+                 </div>
+               </div>
+               
+               <div className="mt-auto pt-6 border-t border-slate-100 shrink-0 text-center text-xs text-slate-400">
+                  เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร (หน้า 4/4)
+               </div>
+           </div>
+
+        </div>
+      </div>
+
+    </div>
+  );
+}
