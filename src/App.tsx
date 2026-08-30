@@ -3529,37 +3529,16 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
 // FORM COMPONENTS
 // ==========================================
 function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
-  const [targets, setTargets] = useState({});
-  const [globalTarget, setGlobalTarget] = useState(1000);
-  const [selectedAffiliation, setSelectedAffiliation] = useState('all');
+  
+  const [selectedAffiliation, setSelectedAffiliation] = useState(profile.role === 'superadmin' ? 'all' : profile.affiliation);
   const [expandedRows, setExpandedRows] = useState({});
-  const [editingTarget, setEditingTarget] = useState(null);
-
-  useEffect(() => {
-    const loadTargets = async () => {
-      try {
-        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'project_targets');
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
-          const data = snap.data();
-          if (data.targets) {
-            try { setTargets(JSON.parse(data.targets)); } catch (e) {}
-          }
-          if (data.globalTarget) {
-            setGlobalTarget(Number(data.globalTarget));
-          }
-        }
-      } catch (err) {
-        console.error("Failed to load targets", err);
-      }
-    };
-    loadTargets();
-  }, []);
-
-  const affiliations = Array.from(new Set(users.filter(u => u.accountType === 'student').map(u => u.affiliation).filter(Boolean)));
+  
+  const baseStudents = users.filter(u => (['student', 'community'].includes(u.accountType) || u.role === 'user') && (profile.role === 'superadmin' || u.affiliation === profile.affiliation));
+  
+  const affiliations = Array.from(new Set(baseStudents.map(u => u.affiliation).filter(Boolean)));
   
   const getStats = (affil) => {
-    let studentsInAffil = users.filter(u => u.accountType === 'student');
+    let studentsInAffil = baseStudents;
     if (affil !== 'all') {
       studentsInAffil = studentsInAffil.filter(u => u.affiliation === affil);
     }
@@ -3624,7 +3603,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
     const overallUniqueUsers = new Set([...Object.keys(st5UserVisits), ...Object.keys(behaviorUserVisits)]);
     const overallUniqueScreenedCount = overallUniqueUsers.size;
 
-    const target = affil === 'all' ? globalTarget : (targets[affil] || 100);
+    const target = affil === 'all' ? 50 * (affiliations.length || 1) : 50;
     const progressPercent = target > 0 ? ((overallUniqueScreenedCount / target) * 100).toFixed(1) : '0';
     
     return {
@@ -3656,31 +3635,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
       setExpandedRows(prev => ({ ...prev, [affil]: !prev[affil] }));
   };
 
-  const handleSaveTarget = async (affil, value) => {
-      let newGlobal = globalTarget;
-      let newTargets = { ...targets };
-
-      if (affil === 'all') {
-          newGlobal = Number(value);
-          setGlobalTarget(newGlobal);
-      } else {
-          newTargets[affil] = Number(value);
-          setTargets(newTargets);
-      }
-      setEditingTarget(null);
-
-      try {
-         const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'project_targets');
-         await setDoc(docRef, {
-             targets: JSON.stringify(newTargets),
-             globalTarget: newGlobal,
-             updatedAt: Date.now()
-         });
-      } catch (err) {
-         console.error("Failed to save target", err);
-      }
-  };
-
+  
   const [isPrinting, setIsPrinting] = useState(false);
 
   const handlePrint = async () => {
@@ -3772,24 +3727,8 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                       <Target size={14} /> เป้าหมายรวม
                   </div>
                   <div className="flex items-baseline gap-1">
-                      {editingTarget?.id === 'all' ? (
-                          <input 
-                              type="number"
-                              autoFocus
-                              defaultValue={overviewStats.target}
-                              onBlur={(e) => handleSaveTarget('all', e.target.value)}
-                              onKeyDown={(e) => e.key === 'Enter' && handleSaveTarget('all', e.target.value)}
-                              className="w-16 bg-white border border-slate-300 rounded px-1 font-bold text-lg outline-none focus:border-emerald-400"
-                          />
-                      ) : (
-                          <>
-                              <span className="text-2xl font-black text-slate-800">{overviewStats.target}</span>
-                              <span className="text-[10px] font-bold text-slate-500">คน</span>
-                              <button onClick={() => setEditingTarget({ id: 'all', value: overviewStats.target })} className="ml-1 text-slate-300 hover:text-slate-500 no-print">
-                                  <Pencil size={12} />
-                              </button>
-                          </>
-                      )}
+                      <span className="text-2xl font-black text-slate-800">{overviewStats.target}</span>
+                      <span className="text-[10px] font-bold text-slate-500">คน</span>
                   </div>
                   <div className="text-[11px] text-emerald-600 font-black mt-0.5">
                       คิดเป็น {overviewStats.progressPercent}%
@@ -3804,16 +3743,22 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
             <Filter size={16} /> ตัวกรอง:
          </div>
          <div className="flex flex-wrap gap-3">
-             <select 
-                value={selectedAffiliation}
-                onChange={(e) => setSelectedAffiliation(e.target.value)}
-                className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl px-4 py-2 font-medium min-w-[200px] outline-none focus:border-blue-300 transition-colors"
-             >
-                <option value="all">ทุกพื้นที่เป้าหมาย / สังกัด</option>
-                {affiliations.map(aff => (
-                    <option key={aff} value={aff}>{aff}</option>
-                ))}
-             </select>
+             {profile.role === 'superadmin' ? (
+                 <select 
+                    value={selectedAffiliation}
+                    onChange={(e) => setSelectedAffiliation(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl px-4 py-2 font-medium min-w-[200px] outline-none focus:border-blue-300 transition-colors"
+                 >
+                    <option value="all">ทุกพื้นที่เป้าหมาย / สังกัด</option>
+                    {affiliations.map(aff => (
+                        <option key={aff} value={aff}>{aff}</option>
+                    ))}
+                 </select>
+             ) : (
+                 <div className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl px-4 py-2 font-medium min-w-[200px] flex items-center">
+                    {profile.affiliation}
+                 </div>
+             )}
              <div className="bg-slate-50 border border-slate-200 text-slate-400 text-sm rounded-xl px-4 py-2 font-medium min-w-[150px] cursor-not-allowed flex items-center justify-between">
                 ทุกโมเดล <ChevronDown size={14}/>
              </div>
@@ -3871,23 +3816,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                                       <td className="p-4 md:p-5 md:text-center flex justify-between md:justify-center items-center h-auto md:h-[72px] md:table-cell">
                                           <span className="md:hidden text-[10px] font-bold text-slate-500">เป้าหมาย</span>
                                           <div className="flex items-center gap-1 justify-end md:justify-center">
-                                              {editingTarget?.id === affil ? (
-                                                  <input 
-                                                      type="number"
-                                                      autoFocus
-                                                      defaultValue={stats.target}
-                                                      onBlur={(e) => handleSaveTarget(affil, e.target.value)}
-                                                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTarget(affil, e.target.value)}
-                                                      className="w-16 bg-white border border-slate-300 rounded px-1 font-bold text-sm text-center outline-none focus:border-indigo-400"
-                                                  />
-                                              ) : (
-                                                  <>
-                                                      <span className="text-lg font-black text-indigo-700">{stats.target}</span>
-                                                      <button onClick={() => setEditingTarget({ id: affil, value: stats.target })} className="text-slate-300 hover:text-slate-500 no-print">
-                                                          <Pencil size={12} />
-                                                      </button>
-                                                  </>
-                                              )}
+                                              <span className="text-lg font-black text-indigo-700">{stats.target}</span>
                                           </div>
                                       </td>
                                       <td className="p-4 md:p-5 md:table-cell flex flex-col justify-center bg-slate-50/50 md:bg-transparent">
@@ -3909,51 +3838,40 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                                               
                                               <div className="mb-8">
                                                   <h5 className="flex items-center gap-2 text-[13px] font-black text-slate-700 mb-4">
-                                                      <Activity size={16} className="text-blue-500" /> แยกตามรายการครั้งที่ (Visits Breakdown) - ประเมินสุขภาพจิต (ST-5)
+                                                      <Activity size={16} className="text-blue-500" /> สรุปผลงานตามรายการครั้งที่ (Visits Breakdown)
                                                   </h5>
-                                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                                                      {Object.keys(stats.st5.breakdown).sort((a,b)=>Number(a)-Number(b)).map(visitNum => {
-                                                          const count = stats.st5.breakdown[visitNum];
-                                                          const pct = stats.target > 0 ? ((count / stats.target) * 100).toFixed(1) : '0';
-                                                          return (
-                                                              <div key={visitNum} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                                                                  <div className="flex justify-between items-center mb-3 border-b border-slate-50 pb-2">
-                                                                      <span className="font-bold text-[13px] text-slate-700">ครั้งที่ {visitNum}</span>
-                                                                      <span className="font-black text-blue-600 text-sm">{count} คน <span className="text-[10px] text-slate-400 font-medium ml-1">({pct}%)</span></span>
-                                                                  </div>
-                                                                  <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                                                                      <div className="bg-blue-500 h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, Number(pct))}%` }}></div>
-                                                                  </div>
-                                                              </div>
-                                                          )
-                                                      })}
-                                                      {Object.keys(stats.st5.breakdown).length === 0 && (
-                                                          <div className="col-span-full text-sm text-slate-400 italic bg-white p-4 rounded-xl border border-slate-200 shadow-sm">ไม่มีข้อมูลการคัดกรอง ST-5</div>
-                                                      )}
-                                                  </div>
-                                                  
-                                                  <h5 className="flex items-center gap-2 text-[13px] font-black text-slate-700 mb-4 mt-6">
-                                                      <Activity size={16} className="text-indigo-500" /> แยกตามรายการครั้งที่ (Visits Breakdown) - ประเมินพฤติกรรม
-                                                  </h5>
-                                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                      {Object.keys(stats.behavior.breakdown).sort((a,b)=>Number(a)-Number(b)).map(visitNum => {
-                                                          const count = stats.behavior.breakdown[visitNum];
-                                                          const pct = stats.target > 0 ? ((count / stats.target) * 100).toFixed(1) : '0';
-                                                          return (
-                                                              <div key={visitNum} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                                                                  <div className="flex justify-between items-center mb-3 border-b border-slate-50 pb-2">
-                                                                      <span className="font-bold text-[13px] text-slate-700">ครั้งที่ {visitNum}</span>
-                                                                      <span className="font-black text-indigo-600 text-sm">{count} คน <span className="text-[10px] text-slate-400 font-medium ml-1">({pct}%)</span></span>
-                                                                  </div>
-                                                                  <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                                                                      <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, Number(pct))}%` }}></div>
-                                                                  </div>
-                                                              </div>
-                                                          )
-                                                      })}
-                                                      {Object.keys(stats.behavior.breakdown).length === 0 && (
-                                                          <div className="col-span-full text-sm text-slate-400 italic bg-white p-4 rounded-xl border border-slate-200 shadow-sm">ไม่มีข้อมูลการประเมินพฤติกรรม</div>
-                                                      )}
+                                                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+                                                      <table className="w-full text-left text-sm">
+                                                          <thead className="bg-slate-50 border-b border-slate-100">
+                                                              <tr>
+                                                                  <th className="p-3 font-bold text-slate-500 text-[11px] uppercase tracking-wider text-center">ครั้งที่</th>
+                                                                  <th className="p-3 font-bold text-slate-500 text-[11px] uppercase tracking-wider text-center">เป้าหมาย (คน)</th>
+                                                                  <th className="p-3 font-bold text-slate-500 text-[11px] uppercase tracking-wider text-center">ผลงานรวม (คน)</th>
+                                                                  <th className="p-3 font-bold text-slate-500 text-[11px] uppercase tracking-wider text-center">ร้อยละ</th>
+                                                              </tr>
+                                                          </thead>
+                                                          <tbody className="divide-y divide-slate-100">
+                                                              {Object.keys(stats.visitsBreakdown).sort((a,b)=>Number(a)-Number(b)).map(visitNum => {
+                                                                  const count = stats.visitsBreakdown[visitNum];
+                                                                  const pct = stats.target > 0 ? ((count / stats.target) * 100).toFixed(1) : '0';
+                                                                  return (
+                                                                      <tr key={visitNum} className="hover:bg-slate-50/50">
+                                                                          <td className="p-3 font-bold text-slate-700 text-center">{visitNum}</td>
+                                                                          <td className="p-3 text-center text-slate-600 font-medium">{stats.target}</td>
+                                                                          <td className="p-3 text-center">
+                                                                              <span className="font-black text-blue-600">{count}</span>
+                                                                          </td>
+                                                                          <td className="p-3 text-center text-teal-600 font-bold">{pct}%</td>
+                                                                      </tr>
+                                                                  )
+                                                              })}
+                                                              {Object.keys(stats.visitsBreakdown).length === 0 && (
+                                                                  <tr>
+                                                                      <td colSpan={4} className="p-4 text-center text-slate-400 italic text-xs">ไม่มีข้อมูลการคัดกรอง</td>
+                                                                  </tr>
+                                                              )}
+                                                          </tbody>
+                                                      </table>
                                                   </div>
                                               </div>
 
@@ -4360,31 +4278,62 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
     const affRisk = affSt5.filter(d => ['เครียดสูง', 'เครียดรุนแรง'].includes(d.level) || parseInt(d.score) >= 8);
     const affUniqueRisk = new Set(affRisk.map(d => d.uid || d.userId)).size;
     
-    return { name: aff, students: affUniqueScreened, evaluations: affSt5.length + affBehaviors.length, risk: affUniqueRisk };
+    let goodBehCount = 0;
+    let badBehCount = 0;
+    affBehaviors.forEach(beh => {
+      if (beh.selections && beh.selections.desirable && beh.selections.desirable.length > 0) goodBehCount++;
+      if (beh.selections && beh.selections.undesirable && beh.selections.undesirable.length > 0) badBehCount++;
+    });
+    
+    return { 
+      name: aff, 
+      students: affUniqueScreened, 
+      evaluations: affSt5.length + affBehaviors.length, 
+      risk: affUniqueRisk,
+      goodBeh: goodBehCount,
+      badBeh: badBehCount
+    };
   }).sort((a, b) => b.students - a.students);
 
-  // ST-5 Chart Data
-  const st5Levels = st5Linked.reduce((acc, curr) => {
-    const level = curr.level || 'ไม่ระบุ';
-    acc[level] = (acc[level] || 0) + 1;
-    return acc;
-  }, {});
-  
-  const getLevelColor = (level) => {
-    if (level === 'เครียดน้อย' || level === 'ปกติ') return '#10b981'; // emerald-500
-    if (level === 'เครียดปานกลาง') return '#facc15'; // yellow-400
-    if (level === 'เครียดสูง') return '#f97316'; // orange-500
-    if (level === 'เครียดรุนแรง') return '#ef4444'; // red-500
-    return '#94a3b8'; // slate-400
+  // ST-5 Chart Data (Aligned with Executive Dashboard - latest evaluation per user)
+  let riskCounts = {
+    'Low': 0,
+    'Medium': 0,
+    'High': 0,
+    'Severe': 0
   };
+  let validSt5Count = 0;
+
+  students.forEach(user => {
+    const uSt5 = st5Linked.filter(s => s.uid === user.id || s.userId === user.id);
+    if (uSt5.length > 0) {
+      const latestScore = uSt5[0].score;
+      const risk = calculateST5(latestScore).risk;
+      if (riskCounts[risk] !== undefined) {
+        riskCounts[risk]++;
+        validSt5Count++;
+      }
+    }
+  });
+
+  const st5PieData = [
+    { name: 'เครียดน้อย (ปกติ)', value: riskCounts['Low'], fill: '#10b981' },
+    { name: 'เครียดปานกลาง', value: riskCounts['Medium'], fill: '#facc15' },
+    { name: 'เครียดสูง', value: riskCounts['High'], fill: '#f97316' },
+    { name: 'เครียดรุนแรง', value: riskCounts['Severe'], fill: '#ef4444' }
+  ].filter(d => d.value > 0);
   
-  const st5PieData = Object.keys(st5Levels).map(key => ({ 
-    name: key, 
-    value: st5Levels[key],
-    fill: getLevelColor(key)
-  }));
+  const maxSt5Level = st5PieData.length > 0 ? st5PieData.reduce((max, current) => current.value > (max?.value || 0) ? current : max, st5PieData[0]) : null;
+  const st5PieInterpretation = validSt5Count === 0 
+    ? 'การแปรผล: ยังไม่มีข้อมูลการประเมิน ST-5'
+    : `การแปรผล: เยาวชนส่วนใหญ่อยู่ในกลุ่ม "${maxSt5Level?.name || 'ไม่มีข้อมูล'}" คิดเป็น ${Math.round((maxSt5Level?.value / validSt5Count) * 100)}% ของผู้รับการประเมินทั้งหมด`;
 
   const barData = tableData.slice(0, 5);
+  const maxAffiliation = barData[0];
+  const barInterpretation = maxAffiliation 
+    ? `การแปรผล: องค์กร/สถานที่ที่มีเยาวชนเข้ารับการประเมินสูงสุดคือ "${maxAffiliation.name}" (จำนวน ${maxAffiliation.students} คน) ควรจัดสรรทรัพยากรพี่เลี้ยงให้เหมาะสมกับสัดส่วนนี้`
+    : 'การแปรผล: ยังไม่มีข้อมูลจำนวนเยาวชนในระบบ';
+
 
   // AI Policy Recommendations
   const generateRecommendations = () => {
@@ -4444,7 +4393,20 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (element.offsetHeight * pdfWidth) / 794; 
       
-      pdf.addImage(canvas, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      let position = 0;
+      let heightLeft = pdfHeight;
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      
+      pdf.addImage(canvas, 'PNG', 0, position, pdfWidth, pdfHeight);
+      heightLeft -= pageHeight;
+      
+      while (heightLeft > 0) {
+          position = heightLeft - pdfHeight;
+          pdf.addPage();
+          pdf.addImage(canvas, 'PNG', 0, position, pdfWidth, pdfHeight);
+          heightLeft -= pageHeight;
+      }
+      
       pdf.save(`Executive_Report_${new Date().getTime()}.pdf`);
     } catch (err) {
       console.error(err);
@@ -4457,25 +4419,25 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
   const renderKPIs = (isPrint = false) => (
       <>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 text-center shadow-sm">
-            <div className="text-blue-500 mb-1 flex justify-center"><Users size={28} /></div>
-            <div className="text-3xl font-black text-blue-700">{totalScreenedStudents}</div>
-            <div className="text-xs font-bold text-blue-600 mt-1">ยอดคัดกรอง (คน)</div>
+          <div className={`bg-blue-50 ${isPrint ? 'p-2' : 'p-4'} rounded-2xl border border-blue-100 text-center shadow-sm`}>
+            <div className="text-blue-500 mb-1 flex justify-center"><Users size={isPrint ? 20 : 28} /></div>
+            <div className={`${isPrint ? 'text-2xl' : 'text-3xl'} font-black text-blue-700`}>{totalScreenedStudents}</div>
+            <div className={`${isPrint ? 'text-[10px]' : 'text-xs'} font-bold text-blue-600 mt-1`}>ยอดคัดกรอง (คน)</div>
           </div>
-          <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-center shadow-sm">
-            <div className="text-emerald-500 mb-1 flex justify-center"><BarChart3 size={28} /></div>
-            <div className="text-3xl font-black text-emerald-700">{totalEvaluations}</div>
-            <div className="text-xs font-bold text-emerald-600 mt-1">การประเมินรวม (ครั้ง)</div>
+          <div className={`bg-emerald-50 ${isPrint ? 'p-2' : 'p-4'} rounded-2xl border border-emerald-100 text-center shadow-sm`}>
+            <div className="text-emerald-500 mb-1 flex justify-center"><BarChart3 size={isPrint ? 20 : 28} /></div>
+            <div className={`${isPrint ? 'text-2xl' : 'text-3xl'} font-black text-emerald-700`}>{totalEvaluations}</div>
+            <div className={`${isPrint ? 'text-[10px]' : 'text-xs'} font-bold text-emerald-600 mt-1`}>การประเมินรวม (ครั้ง)</div>
           </div>
-          <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100 text-center shadow-sm">
-            <div className="text-rose-500 mb-1 flex justify-center"><AlertCircle size={28} /></div>
-            <div className="text-3xl font-black text-rose-700">{uniqueRiskUsers.size}</div>
-            <div className="text-xs font-bold text-rose-600 mt-1">พบกลุ่มเสี่ยง (คน)</div>
+          <div className={`bg-rose-50 ${isPrint ? 'p-2' : 'p-4'} rounded-2xl border border-rose-100 text-center shadow-sm`}>
+            <div className="text-rose-500 mb-1 flex justify-center"><AlertCircle size={isPrint ? 20 : 28} /></div>
+            <div className={`${isPrint ? 'text-2xl' : 'text-3xl'} font-black text-rose-700`}>{uniqueRiskUsers.size}</div>
+            <div className={`${isPrint ? 'text-[10px]' : 'text-xs'} font-bold text-rose-600 mt-1`}>พบกลุ่มเสี่ยง (คน)</div>
           </div>
-          <div className="bg-purple-50 p-4 rounded-2xl border border-purple-100 text-center shadow-sm">
-            <div className="text-purple-500 mb-1 flex justify-center"><TrendingUp size={28} /></div>
-            <div className="text-3xl font-black text-purple-700">{riskPercentage}%</div>
-            <div className="text-xs font-bold text-purple-600 mt-1">สัดส่วนกลุ่มเสี่ยง</div>
+          <div className={`bg-purple-50 ${isPrint ? 'p-2' : 'p-4'} rounded-2xl border border-purple-100 text-center shadow-sm`}>
+            <div className="text-purple-500 mb-1 flex justify-center"><TrendingUp size={isPrint ? 20 : 28} /></div>
+            <div className={`${isPrint ? 'text-2xl' : 'text-3xl'} font-black text-purple-700`}>{riskPercentage}%</div>
+            <div className={`${isPrint ? 'text-[10px]' : 'text-xs'} font-bold text-purple-600 mt-1`}>สัดส่วนกลุ่มเสี่ยง</div>
           </div>
         </div>
 
@@ -4486,27 +4448,30 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
             </h3>
             <div className="h-64 bg-slate-50/50 rounded-2xl p-2 border border-slate-100 flex items-center justify-center">
               {isPrint ? (
-                <PieChart width={300} height={250}>
-                  <Pie data={st5PieData} cx={150} cy={120} innerRadius={45} outerRadius={70} paddingAngle={2} dataKey="value" label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} style={{fontSize: '11px', fontWeight: 'bold', fill: '#475569'}} isAnimationActive={false}>
+                <RechartsPieChart width={300} height={250}>
+                  <Pie data={st5PieData} cx={150} cy={120} innerRadius={45} outerRadius={70} paddingAngle={2} dataKey="value" label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} style={{fontSize: '11px', fontWeight: 'bold'}} isAnimationActive={false}>
                     {st5PieData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.fill} />
                     ))}
                   </Pie>
-                </PieChart>
+                </RechartsPieChart>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={st5PieData} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={2} dataKey="value" label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} style={{fontSize: '11px', fontWeight: 'bold', fill: '#475569'}} isAnimationActive={false}>
+                  <RechartsPieChart>
+                    <Pie data={st5PieData} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={2} dataKey="value" label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} style={{fontSize: '11px', fontWeight: 'bold'}} isAnimationActive={false}>
                       {st5PieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.fill} />
                       ))}
                     </Pie>
                     <Tooltip />
-                  </PieChart>
+                  </RechartsPieChart>
                 </ResponsiveContainer>
               )}
             </div>
-            <p className="text-xs text-slate-500 text-center px-4">กราฟแสดงสัดส่วนระดับความเครียดของเยาวชนที่ได้รับการประเมิน ST-5 ทั้งหมด โดยแบ่งตามเกณฑ์ของกรมสุขภาพจิต</p>
+            <p className="text-xs text-slate-500 text-center px-4">กราฟแสดงสัดส่วนระดับความเครียดของเยาวชน (อ้างอิงจากผลการประเมินล่าสุดของแต่ละบุคคล) โดยแบ่งตามเกณฑ์ของกรมสุขภาพจิต</p>
+            <div className={`mt-4 p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 ${isPrint ? '!p-2 !mt-2' : ''}`}>
+              <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-indigo-800`}>{st5PieInterpretation}</p>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -4534,41 +4499,58 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
               )}
             </div>
             <p className="text-xs text-slate-500 text-center px-4">กราฟแสดง 5 หน่วยงานที่มีจำนวนเยาวชนที่ได้รับการคัดกรองมากที่สุด เพื่อใช้วางแผนการลงพื้นที่</p>
+            <div className={`mt-4 p-4 bg-teal-50/50 rounded-2xl border border-teal-100 ${isPrint ? '!p-2 !mt-2' : ''}`}>
+              <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-teal-800`}>{barInterpretation}</p>
+            </div>
           </div>
         </div>
       </>
   );
 
-  const renderTable = () => (
+  const renderTable = (isPrint = false) => {
+        const sortedByRisk = [...tableData].sort((a, b) => b.risk - a.risk);
+        const topRiskAffil = sortedByRisk[0];
+        const tableInterpretation = topRiskAffil && topRiskAffil.risk > 0 
+          ? `การแปรผล: องค์กร/สถานที่ที่มีเยาวชนกลุ่มเสี่ยงสูงสุดคือ "${topRiskAffil.name}" (จำนวน ${topRiskAffil.risk} คน) ควรจัดลำดับความสำคัญในการลงพื้นที่และจัดกิจกรรม Intervention ให้กับสถานที่นี้เป็นอันดับแรก`
+          : 'การแปรผล: ปัจจุบันยังไม่พบเยาวชนกลุ่มเสี่ยงในระบบ';
+          
+        return (
         <div className="space-y-4">
           <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
             <Layers size={18} className="text-blue-500" /> ข้อมูลแยกตามสังกัด
           </h3>
           <p className="text-sm text-slate-500 mb-2">ตารางสรุปยอดการคัดกรองพฤติกรรมและความเครียดของเยาวชนในแต่ละสถานศึกษา/ชุมชน พร้อมสัดส่วนกลุ่มเสี่ยงที่ต้องเฝ้าระวัง</p>
-          <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
-            <table className="w-full text-sm text-left">
+          <div className={`${isPrint ? '' : 'overflow-x-auto'} rounded-xl border border-slate-200 shadow-sm`}>
+            <table className={`w-full ${isPrint ? 'text-xs' : 'text-sm'} text-left`}>
               <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
                 <tr>
-                  <th className="px-4 py-3">หน่วยงาน/สถานศึกษา</th>
-                  <th className="px-4 py-3 text-center">เยาวชน</th>
-                  <th className="px-4 py-3 text-center">ประเมิน ST-5</th>
-                  <th className="px-4 py-3 text-center text-rose-600">พบกลุ่มเสี่ยง</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'}`}>หน่วยงาน/สถานศึกษา</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center`}>เยาวชน</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center`}>ประเมิน ST-5</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center text-rose-600`}>พบกลุ่มเสี่ยง</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center text-teal-600`}>ประเมินพฤติกรรมบวก</th>
+                  <th className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center text-orange-600`}>ประเมินพฤติกรรมลบ</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
                 {tableData.map((row, idx) => (
                   <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-4 py-3 font-medium text-slate-800">{row.name}</td>
-                    <td className="px-4 py-3 text-center font-medium">{row.students}</td>
-                    <td className="px-4 py-3 text-center text-slate-500">{row.evaluations}</td>
-                    <td className="px-4 py-3 text-center font-bold text-rose-600">{row.risk}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} font-medium text-slate-800`}>{row.name}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center font-medium`}>{row.students}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center text-slate-500`}>{row.evaluations}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center font-bold text-rose-600`}>{row.risk}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center font-bold text-teal-600`}>{row.goodBeh}</td>
+                    <td className={`px-4 ${isPrint ? 'py-1.5' : 'py-3'} text-center font-bold text-orange-600`}>{row.badBeh}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          <div className={`mt-4 p-4 bg-orange-50/50 rounded-2xl border border-orange-100 ${isPrint ? '!p-2 !mt-2' : ''}`}>
+            <p className={`${isPrint ? 'text-xs' : 'text-sm'} font-medium text-orange-800`}>{tableInterpretation}</p>
+          </div>
         </div>
-  );
+  );}
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -4640,49 +4622,40 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
       </div>
 
       {/* ---------------------------------------------------------
-          HIDDEN PRINTABLE VIEW (A4 Optimized layout for PDF) 
+          HIDDEN PRINTABLE VIEW (Continuous layout for PDF Export) 
           --------------------------------------------------------- */}
       <div className="fixed top-[9999px] left-[9999px] w-[794px] pointer-events-none z-[-100]">
-        <div ref={printRef} className="w-[794px] bg-white p-12 text-slate-800 space-y-10 print-container" style={{ fontFamily: 'Kanit, sans-serif' }}>
+        <div ref={printRef} className="w-[794px] bg-white print-container p-12 text-slate-800 flex flex-col space-y-8 box-border" style={{ fontFamily: 'Kanit, sans-serif' }}>
            
-           {/* Document Header */}
-           <div className="text-center space-y-3 border-b-2 border-slate-800 pb-6">
-              <h1 className="text-3xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
-              <p className="text-xl font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
-              <p className="text-sm text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+           <div className="text-center space-y-1.5 border-b-2 border-slate-800 pb-4 mb-2 shrink-0">
+              <h1 className="text-2xl font-black text-slate-900 tracking-wide">รายงานสรุปผลสัมฤทธิ์ทางการประเมินผู้บริหาร</h1>
+              <p className="text-lg font-bold text-slate-600">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+              <p className="text-xs text-slate-500 font-medium">ข้อมูลประมวลผล ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
            </div>
-
-           {/* Section 1: KPI */}
-           <div className="space-y-4">
+           
+           <div className="space-y-4 shrink-0">
              <h2 className="text-xl font-black text-pink-700 flex items-center gap-2 border-l-4 border-pink-500 pl-3">สรุปภาพรวม (KPIs)</h2>
              {renderKPIs(true)}
            </div>
 
-           <div className="my-8 border-t border-slate-200"></div>
-
-           {/* Section 2: Table Data */}
-           <div className="space-y-4">
+           <div className="space-y-4 shrink-0">
              <h2 className="text-xl font-black text-blue-700 flex items-center gap-2 border-l-4 border-blue-500 pl-3">สถิติแยกตามหน่วยงาน (สุขภาพจิต)</h2>
-             {renderTable()}
+             {renderTable(true)}
            </div>
-
-           <div className="my-8 border-t border-slate-200"></div>
-
-           {/* Section 3: AI Policy */}
-           <div className="space-y-6 pb-10">
+           
+           <div className="space-y-6 shrink-0 pt-4 border-t border-slate-200">
              <h2 className="text-xl font-black text-indigo-700 flex items-center gap-2 border-l-4 border-indigo-500 pl-3">วิเคราะห์แนวโน้ม และข้อเสนอแนะสำหรับผู้บริหาร</h2>
              <div className="grid grid-cols-1 gap-4">
                  {recommendations.map((rec, idx) => (
-                    <div key={idx} className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                    <div key={idx} className="bg-slate-50 p-5 rounded-xl border border-slate-200 shadow-sm break-inside-avoid">
                        <h4 className="font-bold text-slate-800 text-base mb-1">{rec.title}</h4>
-                       <p className="text-slate-600 text-sm leading-relaxed">{rec.text}</p>
+                       <p className="text-slate-600 text-[13px] leading-relaxed">{rec.text}</p>
                     </div>
                  ))}
              </div>
            </div>
            
-           {/* Footer Page */}
-           <div className="text-center text-xs text-slate-400 mt-10 pt-4 border-t border-slate-100">
+           <div className="text-center text-xs text-slate-400 pt-6 mt-8 border-t border-slate-100 shrink-0">
               เอกสารฉบับนี้จัดทำโดยระบบอัตโนมัติ สำหรับใช้เป็นข้อมูลประกอบการตัดสินใจระดับบริหาร
            </div>
 
