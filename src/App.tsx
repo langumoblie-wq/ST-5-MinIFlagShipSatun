@@ -14,7 +14,8 @@ import {
 import { GAS_URL, gasRequest, getFirestore, doc, setDoc, getDoc, getDocs, onSnapshot, addDoc, updateDoc, deleteDoc, collection } from './lib/gasDb';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell,
-  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, AreaChart, Area
+  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, AreaChart, Area,
+  PieChart as RechartsPieChart, Pie
 } from 'recharts';
 
 
@@ -452,6 +453,19 @@ export default function App() {
                </button>
                </>
             )}
+            
+            {profile.role === 'superadmin' && profile.status === 'approved' && (
+               <button 
+                  onClick={() => setActiveTab('executive_report')}
+                  className={`px-5 py-3.5 rounded-2xl flex items-center gap-3 transition-all font-medium text-sm md:text-base ${
+                    activeTab === 'executive_report' 
+                      ? 'bg-amber-500 text-white shadow-md shadow-amber-200' 
+                      : 'bg-white text-slate-500 hover:bg-amber-50 hover:text-amber-600 border border-slate-100'
+                  }`}
+               >
+                 <BarChart3 size={20} /> <span>รายงานสำหรับผู้บริหาร</span>
+               </button>
+            )}
 
             {/* เมนู Sync (เฉพาะ Superadmin และ Username: rung เท่านั้น) */}
             {profile.role === 'superadmin' && profile.id === 'rung' && (
@@ -509,6 +523,9 @@ export default function App() {
             )}
             {activeTab === 'project_report' && (profile.role === 'admin' || profile.role === 'superadmin') && (
               <ProjectReportDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} />
+            )}
+            {activeTab === 'executive_report' && profile.role === 'superadmin' && (
+              <ExecutiveSummaryReport users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} />
             )}
             {activeTab === 'sync' && profile.role === 'superadmin' && profile.id === 'rung' && (
               <SyncDashboard triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} st5Data={st5Data} behaviorData={behaviorData} />
@@ -4280,6 +4297,191 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
         <button onClick={handleSave} disabled={isSubmitting} className="flex-[2] py-4 bg-slate-800 text-white rounded-2xl font-bold hover:bg-slate-700 disabled:opacity-50 shadow-lg transition">
           {initialData ? 'บันทึกการแก้ไข' : 'บันทึกพฤติกรรม'}
         </button>
+      </div>
+    </div>
+  );
+}
+// ==========================================
+// EXECUTIVE SUMMARY REPORT - FOR SUPERADMIN
+// ==========================================
+function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
+  const reportRef = useRef(null);
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportPDF = async () => {
+    if (!reportRef.current) return;
+    setIsExporting(true);
+    try {
+      const element = reportRef.current;
+      const canvas = await toPng(element, { quality: 0.95, backgroundColor: '#ffffff', pixelRatio: 2 });
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (element.offsetHeight * pdfWidth) / element.offsetWidth;
+      pdf.addImage(canvas, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save('executive-summary-report.pdf');
+    } catch (err) {
+      console.error(err);
+      alert('เกิดข้อผิดพลาดในการสร้าง PDF');
+    }
+    setIsExporting(false);
+  };
+
+  const students = users.filter(u => ['student', 'community'].includes(u.accountType));
+  const affiliations = [...new Set(students.map(u => u.affiliation).filter(Boolean))];
+
+  // Overview Stats
+  const totalStudents = students.length;
+  const totalEvaluations = st5Data.length + behaviorData.length;
+  const totalRisk = st5Data.filter(d => ['เครียดสูง', 'เครียดรุนแรง'].includes(d.level) || parseInt(d.score) >= 8).length;
+  const riskPercentage = totalStudents > 0 ? ((totalRisk / totalStudents) * 100).toFixed(1) : 0;
+
+  // Affiliation Table Data
+  const tableData = affiliations.map(aff => {
+    const affStudents = students.filter(s => s.affiliation === aff);
+    const affSt5 = st5Data.filter(d => affStudents.some(s => s.id === d.targetId));
+    const affBehavior = behaviorData.filter(d => affStudents.some(s => s.id === d.targetId));
+    const affRisk = affSt5.filter(d => ['เครียดสูง', 'เครียดรุนแรง'].includes(d.level) || parseInt(d.score) >= 8).length;
+    
+    return {
+      name: aff,
+      students: affStudents.length,
+      evaluations: affSt5.length + affBehavior.length,
+      risk: affRisk
+    };
+  }).sort((a, b) => b.students - a.students);
+
+  // Chart Data
+  const st5Levels = st5Data.reduce((acc, curr) => {
+    const level = curr.level || 'ไม่ระบุ';
+    acc[level] = (acc[level] || 0) + 1;
+    return acc;
+  }, {});
+
+  const pieData = Object.keys(st5Levels).map(key => ({
+    name: key,
+    value: st5Levels[key]
+  }));
+
+  const COLORS = ['#10b981', '#f59e0b', '#f43f5e', '#6366f1', '#8b5cf6'];
+
+  const barData = tableData.slice(0, 5); // Top 5 for chart
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
+        <div>
+          <h2 className="text-2xl font-black text-slate-800">รายงานสรุปผลการดำเนินงาน (Executive Summary)</h2>
+          <p className="text-slate-500">ภาพรวมข้อมูลระดับบริหาร สำหรับผู้อำนวยการและผู้บริหารโครงการ</p>
+        </div>
+        <button onClick={handleExportPDF} disabled={isExporting} className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md transition-all">
+          {isExporting ? <RefreshCw className="animate-spin" size={20} /> : <FileText size={20} />}
+          {isExporting ? 'กำลังสร้าง PDF...' : 'ส่งออก PDF'}
+        </button>
+      </div>
+
+      <div ref={reportRef} className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 space-y-8 print-container">
+        {/* Header inside PDF */}
+        <div className="text-center space-y-2 border-b border-slate-100 pb-6">
+          <h1 className="text-3xl font-black text-slate-800">รายงานสรุปผลการดำเนินงาน</h1>
+          <p className="text-slate-500 text-lg">โครงการพัฒนาทักษะชีวิตและสุขภาพจิตเยาวชน</p>
+          <p className="text-sm text-slate-400">อัปเดตข้อมูลล่าสุด ณ วันที่ {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+        </div>
+
+        {/* Highlight Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 text-center">
+            <div className="text-blue-500 mb-2 flex justify-center"><Users size={32} /></div>
+            <div className="text-4xl font-black text-blue-700">{totalStudents}</div>
+            <div className="text-sm font-medium text-blue-600 mt-1">เยาวชนเป้าหมาย (คน)</div>
+          </div>
+          <div className="bg-emerald-50 p-6 rounded-2xl border border-emerald-100 text-center">
+            <div className="text-emerald-500 mb-2 flex justify-center"><BarChart3 size={32} /></div>
+            <div className="text-4xl font-black text-emerald-700">{totalEvaluations}</div>
+            <div className="text-sm font-medium text-emerald-600 mt-1">การประเมินทั้งหมด (ครั้ง)</div>
+          </div>
+          <div className="bg-rose-50 p-6 rounded-2xl border border-rose-100 text-center">
+            <div className="text-rose-500 mb-2 flex justify-center"><AlertCircle size={32} /></div>
+            <div className="text-4xl font-black text-rose-700">{totalRisk}</div>
+            <div className="text-sm font-medium text-rose-600 mt-1">พบกลุ่มเสี่ยง (คน)</div>
+          </div>
+          <div className="bg-purple-50 p-6 rounded-2xl border border-purple-100 text-center">
+            <div className="text-purple-500 mb-2 flex justify-center"><TrendingUp size={32} /></div>
+            <div className="text-4xl font-black text-purple-700">{riskPercentage}%</div>
+            <div className="text-sm font-medium text-purple-600 mt-1">สัดส่วนกลุ่มเสี่ยง</div>
+          </div>
+        </div>
+
+        {/* Charts Section */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2">
+              <PieChart size={20} className="text-indigo-500" /> สัดส่วนระดับความเครียด (ST-5)
+            </h3>
+            <div className="h-72 bg-slate-50 rounded-2xl p-4 border border-slate-100">
+              <ResponsiveContainer width="100%" height="100%">
+                <RechartsPieChart>
+                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                    {pieData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </RechartsPieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2">
+              <BarChart2 size={20} className="text-teal-500" /> 5 อันดับองค์กรที่มีเยาวชนเข้าร่วมสูงสุด
+            </h3>
+            <div className="h-72 bg-slate-50 rounded-2xl p-4 border border-slate-100">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={barData} margin={{ top: 20, right: 20, left: -20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="name" tick={{fontSize: 12}} />
+                  <YAxis tick={{fontSize: 12}} />
+                  <Tooltip cursor={{fill: '#f8fafc'}} />
+                  <Bar dataKey="students" name="จำนวนเยาวชน (คน)" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        {/* Data Table */}
+        <div className="pt-6">
+          <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2 mb-4">
+            <Layers size={20} className="text-blue-500" /> ตารางสรุปข้อมูลแยกตามสังกัด
+          </h3>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-4">ชื่อหน่วยงาน/สถานศึกษา</th>
+                  <th className="px-6 py-4 text-center">จำนวนเยาวชน</th>
+                  <th className="px-6 py-4 text-center">ประเมินทั้งหมด</th>
+                  <th className="px-6 py-4 text-center text-rose-600">พบกลุ่มเสี่ยง</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {tableData.length === 0 ? (
+                  <tr><td colSpan="4" className="px-6 py-8 text-center text-slate-500">ไม่มีข้อมูล</td></tr>
+                ) : (
+                  tableData.map((row, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50">
+                      <td className="px-6 py-4 font-medium text-slate-800">{row.name}</td>
+                      <td className="px-6 py-4 text-center">{row.students}</td>
+                      <td className="px-6 py-4 text-center">{row.evaluations}</td>
+                      <td className="px-6 py-4 text-center font-bold text-rose-600">{row.risk}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   );
