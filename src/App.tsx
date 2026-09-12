@@ -8,7 +8,7 @@ import {
   PieChart, TrendingUp, AlertCircle, Network, BookOpen,
   HeartPulse, Smile, Sparkles, ClipboardList, LayoutDashboard, UserSquare2, Star,
   ShieldAlert, Lightbulb, UserCheck, HelpCircle, BarChart2, Layers, RefreshCw, Database, Download, Terminal,
-  Brain, Gamepad2, Zap, ShieldOff, Footprints, Flame, Bot, Printer, X, Trophy, Target, Pencil, Filter, ChevronDown, ChevronUp
+  Brain, Gamepad2, Zap, ShieldOff, Footprints, Flame, Bot, Printer, X, Trophy, Target, Pencil, Filter, ChevronDown, ChevronUp, TrendingDown, Minus
 } from 'lucide-react';
 
 import { GAS_URL, gasRequest, getFirestore, doc, setDoc, getDoc, getDocs, onSnapshot, addDoc, updateDoc, deleteDoc, collection } from './lib/gasDb';
@@ -1398,11 +1398,32 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
 
   // ค้นหา
   const filteredStudents = students.filter(u => 
-    u.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    (u.id && u.id.toLowerCase().includes(searchQuery.toLowerCase()))
+    (u.name && String(u.name).toLowerCase().includes(searchQuery.toLowerCase())) || 
+    (u.id && String(u.id).toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   const selectedUser = users.find(u => u.id === selectedUserId);
+
+  const comparisonData = useMemo(() => {
+    return filteredStudents.map(student => {
+        const studentSt5 = st5Data.filter(d => d.uid === student.id || d.userId === student.id).sort((a, b) => a.timestamp - b.timestamp);
+        const positiveBehaviors = behaviorData.filter(d => d.targetUid === student.id && d.selections?.desirable?.length > 0);
+        
+        if (studentSt5.length >= 2 && positiveBehaviors.length >= 1) {
+            const preTest = studentSt5[0];
+            const postTest = studentSt5[studentSt5.length - 1];
+            
+            return {
+                student,
+                preScore: parseInt(preTest.score) || 0,
+                postScore: parseInt(postTest.score) || 0,
+                diff: (parseInt(postTest.score) || 0) - (parseInt(preTest.score) || 0),
+                interventions: positiveBehaviors.length
+            };
+        }
+        return null;
+    }).filter(Boolean);
+  }, [filteredStudents, st5Data, behaviorData]);
 
   return (
     <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100vh-160px)]">
@@ -1443,7 +1464,7 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
             const isSelected = selectedUserId === student.id;
 
             return (
-              <div key={student.id} onClick={() => setSelectedUserId(student.id)} 
+              <div key={`${student.id}-${index}`} onClick={() => setSelectedUserId(student.id)} 
                    className={`p-4 rounded-[2rem] shadow-sm border flex justify-between items-center hover:shadow-md transition-all cursor-pointer group transform hover:-translate-y-0.5 ${isSelected ? 'bg-purple-50 border-purple-200 ring-2 ring-purple-400/20' : 'bg-white border-slate-100 hover:border-purple-200'}`}>
                 <div className="flex items-center gap-4 overflow-hidden">
                   <div className={`w-12 h-12 shrink-0 rounded-full flex items-center justify-center font-black text-lg shadow-inner border border-white transition-colors ${isSelected ? 'bg-purple-500 text-white' : 'bg-gradient-to-br from-purple-100 to-pink-100 text-purple-500'}`}>
@@ -1490,12 +1511,63 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
             />
           </div>
         ) : (
-          <div className="text-center p-8">
-             <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-slate-100">
-               <UserSquare2 size={48} className="text-slate-300" strokeWidth={1.5} />
-             </div>
-             <h3 className="text-xl font-black text-slate-700 mb-2">เลือกรายชื่อในความดูแล</h3>
-             <p className="text-slate-500 font-medium text-sm max-w-sm mx-auto">คลิกเลือกนักเรียนหรือผู้ใช้งานจากรายชื่อด้านซ้าย เพื่อดูรายงานผลสุขภาพจิตและประวัติพฤติกรรมอย่างละเอียด</p>
+          <div className="p-6 lg:p-8 h-full flex flex-col items-center">
+            <div className="text-center mb-8 w-full max-w-2xl">
+              <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-slate-100">
+                <TrendingUp size={40} className="text-teal-400" strokeWidth={1.5} />
+              </div>
+              <h3 className="text-2xl font-black text-slate-800 mb-2">ผลสัมฤทธิ์การปรับเปลี่ยนพฤติกรรม</h3>
+              <p className="text-slate-500 font-medium text-sm">ตารางเปรียบเทียบผลประเมินสุขภาพจิต (ST-5) ก่อนและหลังการทำกิจกรรมเชิงบวก (Behavioral Intervention)</p>
+            </div>
+
+            {comparisonData.length > 0 ? (
+                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden w-full max-w-3xl flex flex-col max-h-[60vh]">
+                    <div className="overflow-y-auto hide-scrollbar">
+                        <table className="w-full text-left">
+                            <thead className="bg-slate-50 border-b border-slate-100 sticky top-0 z-10">
+                                <tr>
+                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider">ชื่อ-สกุล</th>
+                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">กิจกรรมเชิงบวก</th>
+                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">ก่อนทำกิจกรรม<br/><span className="text-[9px] font-medium text-slate-400">(ST-5 แรก)</span></th>
+                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">หลังทำกิจกรรม<br/><span className="text-[9px] font-medium text-slate-400">(ST-5 ล่าสุด)</span></th>
+                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">ผลลัพธ์</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                                {comparisonData.map((row, idx) => (
+                                    <tr key={`comp-${row.student.id}-${idx}`} className="hover:bg-slate-50/50 transition">
+                                        <td className="p-4 text-sm font-bold text-slate-700">
+                                            <button onClick={() => setSelectedUserId(row.student.id)} className="hover:text-purple-600 transition flex items-center gap-2">
+                                                {row.student.name} <ChevronRight size={14} className="text-slate-300" />
+                                            </button>
+                                        </td>
+                                        <td className="p-4 text-center">
+                                            <span className="bg-teal-50 text-teal-600 px-2.5 py-1 rounded-lg text-xs font-bold border border-teal-100">{row.interventions} ครั้ง</span>
+                                        </td>
+                                        <td className="p-4 text-center font-black text-slate-600">{row.preScore}</td>
+                                        <td className="p-4 text-center font-black text-slate-800">{row.postScore}</td>
+                                        <td className="p-4 text-center">
+                                            {row.diff < 0 ? (
+                                                <span className="text-teal-500 font-bold flex items-center justify-center gap-1 text-sm bg-teal-50 px-2 py-1 rounded-lg border border-teal-100 w-max mx-auto"><TrendingDown size={14}/> ลดลง {Math.abs(row.diff)}</span>
+                                            ) : row.diff > 0 ? (
+                                                <span className="text-rose-500 font-bold flex items-center justify-center gap-1 text-sm bg-rose-50 px-2 py-1 rounded-lg border border-rose-100 w-max mx-auto"><TrendingUp size={14}/> เพิ่ม {row.diff}</span>
+                                            ) : (
+                                                <span className="text-slate-400 font-bold flex items-center justify-center gap-1 text-sm bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 w-max mx-auto"><Minus size={14}/> คงที่</span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            ) : (
+                <div className="bg-white p-8 rounded-3xl border border-dashed border-slate-200 text-center w-full max-w-2xl">
+                    <Activity className="mx-auto text-slate-300 mb-4" size={48} />
+                    <p className="text-slate-500 font-medium mb-2">ยังไม่มีข้อมูลเปรียบเทียบผลสัมฤทธิ์</p>
+                    <p className="text-slate-400 text-sm max-w-sm mx-auto leading-relaxed">ระบบจะแสดงผลเมื่อนักเรียนมีการประเมิน ST-5 อย่างน้อย 2 ครั้ง และมีการบันทึกพฤติกรรมเชิงบวกสำเร็จ</p>
+                </div>
+            )}
           </div>
         )}
       </div>
@@ -1653,7 +1725,7 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
             {st5History.map((item, idx) => {
               const status = calculateST5(item.score);
               return (
-                <div key={item.id} className="p-5 md:p-6 border border-slate-100 rounded-[2rem] bg-slate-50/50 space-y-4">
+                <div key={`${item.id}-${idx}`} className="p-5 md:p-6 border border-slate-100 rounded-[2rem] bg-slate-50/50 space-y-4">
                   <div className="flex flex-wrap justify-between items-center gap-3">
                     <span className="text-sm font-medium text-slate-500 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-sm">
                       <span className="font-bold text-sky-500 mr-2">ครั้งที่ {st5History.length - idx}</span>
@@ -1695,7 +1767,7 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
               const desItems = item.selections?.desirable || [];
               const undItems = item.selections?.undesirable || [];
               return (
-                <div key={item.id} className="p-5 md:p-6 border border-slate-100 rounded-[2rem] bg-white shadow-sm hover:shadow-md transition space-y-4">
+                <div key={`${item.id}-${idx}`} className="p-5 md:p-6 border border-slate-100 rounded-[2rem] bg-white shadow-sm hover:shadow-md transition space-y-4">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-3 gap-3">
                      <div className="flex flex-col gap-1">
                        <span className="text-sm font-medium text-slate-500 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200">
@@ -2233,6 +2305,28 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
   const displayUsers = profile.id === 'rung' ? users : users.filter(u => Array.isArray(profile.affiliation) ? profile.affiliation.includes(u.affiliation) : u.affiliation === profile.affiliation);
   const pendingAdmins = displayUsers.filter(u => u.role === 'admin' && u.status === 'pending');
 
+  const comparisonData = useMemo(() => {
+    const students = displayUsers.filter(u => ['student', 'community', 'teacher'].includes(u.accountType));
+    return students.map(student => {
+        const studentSt5 = st5Data.filter(d => d.uid === student.id || d.userId === student.id).sort((a, b) => a.timestamp - b.timestamp);
+        const positiveBehaviors = behaviorData.filter(d => d.targetUid === student.id && d.selections?.desirable?.length > 0);
+        
+        if (studentSt5.length >= 2 && positiveBehaviors.length >= 1) {
+            const preTest = studentSt5[0];
+            const postTest = studentSt5[studentSt5.length - 1];
+            
+            return {
+                student,
+                preScore: parseInt(preTest.score) || 0,
+                postScore: parseInt(postTest.score) || 0,
+                diff: (parseInt(postTest.score) || 0) - (parseInt(preTest.score) || 0),
+                interventions: positiveBehaviors.length
+            };
+        }
+        return null;
+    }).filter(Boolean);
+  }, [displayUsers, st5Data, behaviorData]);
+
   const approveAdmin = async (uid) => {
     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid), { status: 'approved' });
     syncToGoogleSheet('UPDATE_STATUS', { uid, status: 'approved' });
@@ -2294,6 +2388,65 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
               </li>
             ))}
           </ul>
+        )}
+      </div>
+
+      <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-12 h-12 bg-teal-50 rounded-2xl flex items-center justify-center border border-teal-100">
+            <TrendingUp size={24} className="text-teal-500" strokeWidth={2.5} />
+          </div>
+          <div>
+            <h3 className="font-black text-xl text-slate-800">ผลสัมฤทธิ์การปรับเปลี่ยนพฤติกรรม</h3>
+            <p className="text-slate-500 font-medium text-xs">เปรียบเทียบผลประเมิน ST-5 ก่อนและหลังทำกิจกรรมเชิงบวก</p>
+          </div>
+        </div>
+
+        {comparisonData.length > 0 ? (
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden w-full max-h-[50vh] flex flex-col">
+                <div className="overflow-y-auto hide-scrollbar">
+                    <table className="w-full text-left">
+                        <thead className="bg-slate-50 border-b border-slate-100 sticky top-0 z-10">
+                            <tr>
+                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider">ชื่อ-สกุล / สังกัด</th>
+                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">กิจกรรมเชิงบวก</th>
+                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">ก่อนทำกิจกรรม<br/><span className="text-[9px] font-medium text-slate-400">(ST-5 แรก)</span></th>
+                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">หลังทำกิจกรรม<br/><span className="text-[9px] font-medium text-slate-400">(ST-5 ล่าสุด)</span></th>
+                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">ผลลัพธ์</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {comparisonData.map((row, idx) => (
+                                <tr key={`sup-comp-${row.student.id}-${idx}`} className="hover:bg-slate-50/50 transition">
+                                    <td className="p-4 text-sm font-bold text-slate-700">
+                                        {row.student.name}
+                                        <div className="text-[10px] text-slate-400 mt-1">{row.student.affiliation}</div>
+                                    </td>
+                                    <td className="p-4 text-center">
+                                        <span className="bg-teal-50 text-teal-600 px-2.5 py-1 rounded-lg text-xs font-bold border border-teal-100">{row.interventions} ครั้ง</span>
+                                    </td>
+                                    <td className="p-4 text-center font-black text-slate-600">{row.preScore}</td>
+                                    <td className="p-4 text-center font-black text-slate-800">{row.postScore}</td>
+                                    <td className="p-4 text-center">
+                                        {row.diff < 0 ? (
+                                            <span className="text-teal-500 font-bold flex items-center justify-center gap-1 text-sm bg-teal-50 px-2 py-1 rounded-lg border border-teal-100 w-max mx-auto"><TrendingDown size={14}/> ลดลง {Math.abs(row.diff)}</span>
+                                        ) : row.diff > 0 ? (
+                                            <span className="text-rose-500 font-bold flex items-center justify-center gap-1 text-sm bg-rose-50 px-2 py-1 rounded-lg border border-rose-100 w-max mx-auto"><TrendingUp size={14}/> เพิ่ม {row.diff}</span>
+                                        ) : (
+                                            <span className="text-slate-400 font-bold flex items-center justify-center gap-1 text-sm bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 w-max mx-auto"><Minus size={14}/> คงที่</span>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        ) : (
+            <div className="bg-slate-50 p-6 rounded-3xl border border-dashed border-slate-200 text-center">
+                <Activity className="mx-auto text-slate-300 mb-3" size={32} />
+                <p className="text-slate-500 font-medium text-sm">ยังไม่มีข้อมูลเปรียบเทียบผลสัมฤทธิ์ในสังกัดนี้</p>
+            </div>
         )}
       </div>
 
@@ -2949,7 +3102,7 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
             onChange={e => setSelectedUserFilter(e.target.value)}
           >
             <option value="all">✦ วิเคราะห์แบบประชากรกลุ่ม (Group Profiling)</option>
-            {studentsInAffiliation.map(u => <option key={u.id} value={u.id}>{u.name} (@{u.id})</option>)}
+            {studentsInAffiliation.map((u, index) => <option key={`${u.id}-${index}`} value={u.id}>{u.name} (@{u.id})</option>)}
           </select>
         </div>
       </div>
@@ -3461,7 +3614,7 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
                     return uSt5.map((item: any, idx: number) => {
                       const status = calculateST5(item.score);
                       return (
-                        <div key={item.id} className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 flex justify-between items-center gap-3">
+                        <div key={`${item.id}-${idx}`} className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 flex justify-between items-center gap-3">
                           <div>
                             <p className="text-xs font-bold text-slate-600">ครั้งที่ {uSt5.length - idx}</p>
                             <p className="text-[10px] text-slate-400 mt-0.5">{new Date(item.timestamp).toLocaleDateString('th-TH')}</p>
@@ -3494,7 +3647,7 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
                     const uBeh = [...behaviorData.filter((d: any) => d.targetUid === selectedStudentForDetail.uid)].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
                     if (uBeh.length === 0) return <p className="text-slate-400 text-xs py-4 text-center">ไม่พบข้อมูลประวัติพฤติกรรม</p>;
                     return uBeh.map((item: any, idx: number) => (
-                      <div key={item.id || idx} className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 flex justify-between items-center gap-3">
+                      <div key={`beh-${item.id}-${idx}`} className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 flex justify-between items-center gap-3">
                         <div>
                           <p className="text-xs font-bold text-slate-600">ประเมินเมื่อ {new Date(item.timestamp).toLocaleDateString('th-TH')}</p>
                           <p className="text-[10px] text-slate-400 mt-0.5">โดยครู/ผู้รับผิดชอบ</p>
@@ -4024,7 +4177,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                                     const count = stats.visitsBreakdown[visitNum] || 0;
                                     const percent = stats.target > 0 ? ((count / stats.target) * 100).toFixed(1) : '0.0';
                                     return (
-                                        <React.Fragment key={visitNum}>
+                                        <React.Fragment key={`${affil}-${visitNum}`}>
                                             <td className="border border-black p-2 text-center">{count > 0 ? count : ''}</td>
                                             <td className="border border-black p-2 text-center">{count > 0 ? percent : ''}</td>
                                         </React.Fragment>
@@ -4216,7 +4369,7 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
                   const roundNum = st5History.length - idx;
                   const dateStr = new Date(st5.timestamp).toLocaleDateString('th-TH', { dateStyle: 'short' });
                   return (
-                    <option key={st5.id} value={st5.id}>
+                    <option key={`${st5.id}-${index}`} value={st5.id}>
                       ครั้งที่ {roundNum} ({dateStr}) - {st5.level || calculateST5(st5.score).level}
                     </option>
                   );
@@ -4925,7 +5078,7 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
                  </h3>
                  <div className="space-y-4">
                    {aiInsightTexts.map((text, idx) => (
-                      <div key={idx} className="flex gap-4 items-start bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100">
+                      <div key={`insight-${idx}`} className="flex gap-4 items-start bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100">
                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0">{idx + 1}</div>
                          <p className="text-slate-700 text-sm leading-relaxed pt-1.5">{text}</p>
                       </div>
@@ -4939,7 +5092,7 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
                  </h3>
                  <div className="space-y-4">
                    {recommendations.map((rec, idx) => (
-                      <div key={idx} className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100">
+                      <div key={`rec-${idx}`} className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100">
                          <h4 className="font-bold text-blue-700 mb-2">{rec.title}</h4>
                          <p className="text-slate-700 text-sm leading-relaxed">{rec.text}</p>
                       </div>
@@ -5034,7 +5187,7 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
                  <h3 className="font-bold text-slate-700 mt-4">บทวิเคราะห์ AI เชิงลึกรายประเด็น</h3>
                  <div className="grid grid-cols-1 gap-3 mb-6">
                      {aiInsightTexts.map((text, idx) => (
-                        <div key={idx} className="flex gap-3 items-start bg-slate-50 p-4 rounded-xl border border-slate-200 break-inside-avoid shadow-sm">
+                        <div key={`pdf-demo-${idx}`} className="flex gap-3 items-start bg-slate-50 p-4 rounded-xl border border-slate-200 break-inside-avoid shadow-sm">
                            <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0 text-xs">{idx + 1}</div>
                            <p className="text-slate-700 text-xs leading-relaxed pt-1">{text}</p>
                         </div>
@@ -5044,7 +5197,7 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
                  <h3 className="font-bold text-slate-700 mt-6">ข้อเสนอแนะนโยบายสำหรับผู้บริหาร</h3>
                  <div className="grid grid-cols-1 gap-4">
                      {recommendations.map((rec, idx) => (
-                        <div key={idx} className="bg-slate-50 p-5 rounded-xl border border-slate-200 shadow-sm break-inside-avoid">
+                        <div key={`pdf-rec-${idx}`} className="bg-slate-50 p-5 rounded-xl border border-slate-200 shadow-sm break-inside-avoid">
                            <h4 className="font-bold text-slate-800 text-sm mb-1">{rec.title}</h4>
                            <p className="text-slate-600 text-[12px] leading-relaxed">{rec.text}</p>
                         </div>
