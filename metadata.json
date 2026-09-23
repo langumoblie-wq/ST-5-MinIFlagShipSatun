@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "ระบบติดตามสุขภาพจิตและการปรับเปลี่ยนพฤติกรรม",
+  "description": "ระบบประเมินสุขภาพจิต ST-5 บันทึกพฤติกรรมเชิงบวก และติดตามผลสัมฤทธิ์การปรับเปลี่ยนพฤติกรรมหลายครั้ง",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

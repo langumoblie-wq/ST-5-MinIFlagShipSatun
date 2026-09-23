@@ -8,13 +8,14 @@ import {
   PieChart, TrendingUp, AlertCircle, Network, BookOpen,
   HeartPulse, Smile, Sparkles, ClipboardList, LayoutDashboard, UserSquare2, Star,
   ShieldAlert, Lightbulb, UserCheck, HelpCircle, BarChart2, Layers, RefreshCw, Database, Download, Terminal,
-  Brain, Gamepad2, Zap, ShieldOff, Footprints, Flame, Bot, Printer, X, Trophy, Target, Pencil, Filter, ChevronDown, ChevronUp, TrendingDown, Minus
+  Brain, Gamepad2, Zap, ShieldOff, Footprints, Flame, Bot, Printer, X, Trophy, Target, Pencil, Filter, ChevronDown, ChevronUp, TrendingDown, Minus,
+  Search, Calendar, ArrowRight, History
 } from 'lucide-react';
 
 import { GAS_URL, gasRequest, getFirestore, doc, setDoc, getDoc, getDocs, onSnapshot, addDoc, updateDoc, deleteDoc, collection } from './lib/gasDb';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell,
-  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, AreaChart, Area,
+  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, AreaChart, Area, ReferenceLine,
   PieChart as RechartsPieChart, Pie
 } from 'recharts';
 
@@ -126,6 +127,36 @@ const schoolOptions = [
 const communityOptions = [
   "ชุมชนเพื่อน้องสุขใจ (เกตรี)", "ชุมชนเพื่อน้องสุขใจ (แป-ระ)"
 ];
+
+// Area Metadata Mapping: Model, District, and Area
+export interface AreaInfo {
+  model: string;
+  district: string;
+}
+
+const areaMetadataMap: Record<string, AreaInfo> = {
+  "โรงเรียนควนโดนวิทยา": { model: "โรงเรียน", district: "ควนโดน" },
+  "โรงเรียนอนุบาลท่าแพพัฒนา": { model: "โรงเรียน", district: "ท่าแพ" },
+  "โรงเรียนทุ่งหว้าวรวิทย์": { model: "โรงเรียน", district: "ทุ่งหว้า" },
+  "โรงเรียนพัฒนาการมูลนิธิ": { model: "โรงเรียน", district: "ควนกาหลง" },
+  "โรงเรียนบ้านดาหลำ": { model: "โรงเรียน", district: "ละงู" },
+  "โรงเรียนละงูพิทยาคม": { model: "โรงเรียน", district: "ละงู" },
+  "โรงเรียนท่าแพผดุงวิทย์": { model: "โรงเรียน", district: "ท่าแพ" },
+  "โรงเรียนบ้านวังปริง": { model: "โรงเรียน", district: "ท่าแพ" },
+  "ชุมชนเพื่อน้องสุขใจ (เกตรี)": { model: "ชุมชน", district: "เมืองสตูล" },
+  "ชุมชนเพื่อน้องสุขใจ (แป-ระ)": { model: "ชุมชน", district: "ท่าแพ" }
+};
+
+const getAreaMetadata = (aff: string): AreaInfo => {
+  if (!aff) return { model: "ไม่ระบุ", district: "ไม่ระบุ" };
+  if (areaMetadataMap[aff]) return areaMetadataMap[aff];
+  if (aff.includes("ชุมชน")) return { model: "ชุมชน", district: "ไม่ระบุ" };
+  if (aff.includes("โรงเรียน") || aff.includes("รร.")) return { model: "โรงเรียน", district: "ไม่ระบุ" };
+  return { model: "อื่นๆ", district: "ไม่ระบุ" };
+};
+
+const modelOptions = ["โรงเรียน", "ชุมชน"];
+const districtOptions = ["ควนโดน", "ท่าแพ", "ทุ่งหว้า", "ควนกาหลง", "ละงู", "เมืองสตูล"];
 
 const getAffiliationOptions = (accountType) => {
   if (['student', 'teacher', 'admin'].includes(accountType)) return [...schoolOptions, ...communityOptions];
@@ -1385,50 +1416,774 @@ function BehaviorResultSummary({ selections, onSummaryClose }) {
   );
 }
 // ==========================================
+// 📊 COMPONENT: FOLLOW-UP TRACKER VIEW (จำแนกและกรองข้อมูลรายการติดตามครั้งที่)
+// ==========================================
+function FollowUpTrackerView({ 
+  students, 
+  st5Data, 
+  behaviorData, 
+  onSelectStudent, 
+  showAffiliation = false,
+  title = "ระบบติดตามและจำแนกผลการประเมิน",
+  subtitle = "วิเคราะห์ข้อมูลการคัดกรองสุขภาพจิต (ST-5) และพฤติกรรมเชิงบวก แยกตามรายการติดตามครั้งที่",
+  availableAffiliations,
+  selectedAffiliation = 'all',
+  onAffiliationChange
+}: {
+  students: any[];
+  st5Data: any[];
+  behaviorData: any[];
+  onSelectStudent?: (userId: string) => void;
+  showAffiliation?: boolean;
+  title?: string;
+  subtitle?: string;
+  availableAffiliations?: string[];
+  selectedAffiliation?: string;
+  onAffiliationChange?: (aff: string) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<'rounds' | 'comparison'>('rounds');
+  const [selectedRound, setSelectedRound] = useState<string>('all'); // 'all', '1', '2', '3', '4+', 'latest'
+  const [selectedTrend, setSelectedTrend] = useState<string>('all'); // 'all', 'improved', 'stable', 'worsened'
+  const [selectedRisk, setSelectedRisk] = useState<string>('all'); // 'all', 'Low', 'Mild', 'Moderate', 'High', 'Severe'
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // 1. ประมวลผลข้อมูลการติดตามทั้งหมด
+  const { allRoundsData, comparisonData, summaryStats } = useMemo(() => {
+    const rounds: any[] = [];
+    const comparisons: any[] = [];
+    
+    let countR1 = 0;
+    let countR2 = 0;
+    let countR3Plus = 0;
+    let countImproved = 0;
+
+    students.forEach(student => {
+      // ดึง ST-5 ของนักเรียน เรียงตามเวลาเก่า -> ใหม่ (index 0 = ครั้งที่ 1)
+      const userSt5 = st5Data
+        .filter(d => d.uid === student.id || d.userId === student.id)
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      const totalRounds = userSt5.length;
+      if (totalRounds >= 1) countR1++;
+      if (totalRounds >= 2) countR2++;
+      if (totalRounds >= 3) countR3Plus++;
+
+      const userBehaviors = behaviorData.filter(d => d.targetUid === student.id);
+      const positiveBehaviors = userBehaviors.filter(d => d.selections?.desirable?.length > 0);
+
+      // สร้างชุดข้อมูลเปรียบเทียบ Pre vs Post สำหรับคนที่มีการประเมิน 2 ครั้งขึ้นไป
+      if (totalRounds >= 2) {
+        const preTest = userSt5[0];
+        const postTest = userSt5[totalRounds - 1];
+        const preScore = parseInt(preTest.score) || 0;
+        const postScore = parseInt(postTest.score) || 0;
+        const diff = postScore - preScore;
+
+        if (diff < 0) countImproved++;
+
+        comparisons.push({
+          student,
+          totalRounds,
+          preScore,
+          postScore,
+          diff,
+          preDate: preTest.timestamp,
+          postDate: postTest.timestamp,
+          interventions: positiveBehaviors.length,
+          preStatus: calculateST5(preScore),
+          postStatus: calculateST5(postScore)
+        });
+      }
+
+      // แจกแจงรายการติดตามแต่ละรอบ (Round-by-Round Record)
+      userSt5.forEach((st5, idx) => {
+        const roundNumber = idx + 1;
+        const isFirst = idx === 0;
+        const isLatest = idx === totalRounds - 1;
+        const currentScore = parseInt(st5.score) || 0;
+        const status = calculateST5(currentScore);
+
+        const prevSt5 = idx > 0 ? userSt5[idx - 1] : null;
+        const prevScore = prevSt5 ? (parseInt(prevSt5.score) || 0) : null;
+        const diffFromPrev = prevScore !== null ? currentScore - prevScore : null;
+
+        // ดึงกิจกรรมเชิงบวกที่สัมพันธ์กับรอบนี้
+        const linkedBehaviors = userBehaviors.filter(b => {
+          if (b.st5RoundId && b.st5RoundId === st5.id) return true;
+          if (prevSt5) return b.timestamp >= prevSt5.timestamp && b.timestamp <= st5.timestamp;
+          return b.timestamp <= st5.timestamp;
+        });
+
+        const desirableCount = linkedBehaviors.reduce((acc, b) => acc + (b.selections?.desirable?.length || 0), 0);
+
+        rounds.push({
+          id: `${student.id}-r${roundNumber}-${st5.id}`,
+          student,
+          roundNumber,
+          totalRounds,
+          isFirst,
+          isLatest,
+          timestamp: st5.timestamp,
+          score: currentScore,
+          status,
+          prevScore,
+          diffFromPrev,
+          positiveCount: linkedBehaviors.length,
+          desirableItemsCount: desirableCount,
+          suggestion: st5.suggestion || ''
+        });
+      });
+    });
+
+    const retentionRate = countR1 > 0 ? Math.round((countR2 / countR1) * 100) : 0;
+    const successRate = countR2 > 0 ? Math.round((countImproved / countR2) * 100) : 0;
+
+    return {
+      allRoundsData: rounds,
+      comparisonData: comparisons,
+      summaryStats: {
+        totalStudents: students.length,
+        countR1,
+        countR2,
+        countR3Plus,
+        countImproved,
+        retentionRate,
+        successRate
+      }
+    };
+  }, [students, st5Data, behaviorData]);
+
+  // 2. ฟิลเตอร์ข้อมูลในโหมดแจกแจงรอบ (Rounds Tab)
+  const filteredRounds = useMemo(() => {
+    return allRoundsData.filter(item => {
+      // ค้นหาชื่อ หรือ ID
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = item.student.name && String(item.student.name).toLowerCase().includes(q);
+        const matchId = item.student.id && String(item.student.id).toLowerCase().includes(q);
+        const matchAff = item.student.affiliation && String(item.student.affiliation).toLowerCase().includes(q);
+        if (!matchName && !matchId && !matchAff) return false;
+      }
+
+      // กรองสังกัด (ถ้ามี)
+      if (selectedAffiliation && selectedAffiliation !== 'all') {
+        if (item.student.affiliation !== selectedAffiliation) return false;
+      }
+
+      // กรองรอบการติดตาม
+      if (selectedRound === 'latest') {
+        if (!item.isLatest) return false;
+      } else if (selectedRound === '1') {
+        if (item.roundNumber !== 1) return false;
+      } else if (selectedRound === '2') {
+        if (item.roundNumber !== 2) return false;
+      } else if (selectedRound === '3') {
+        if (item.roundNumber !== 3) return false;
+      } else if (selectedRound === '4+') {
+        if (item.roundNumber < 4) return false;
+      }
+
+      // กรองผลลัพธ์ / การเปลี่ยนแปลง
+      if (selectedTrend === 'improved') {
+        if (item.diffFromPrev === null || item.diffFromPrev >= 0) return false;
+      } else if (selectedTrend === 'stable') {
+        if (item.diffFromPrev === null || item.diffFromPrev !== 0) return false;
+      } else if (selectedTrend === 'worsened') {
+        if (item.diffFromPrev === null || item.diffFromPrev <= 0) return false;
+      }
+
+      // กรองระดับความเสี่ยง ST-5
+      if (selectedRisk !== 'all') {
+        if (item.status.risk !== selectedRisk) return false;
+      }
+
+      return true;
+    });
+  }, [allRoundsData, searchQuery, selectedAffiliation, selectedRound, selectedTrend, selectedRisk]);
+
+  // 3. ฟิลเตอร์ข้อมูลในโหมดเปรียบเทียบ (Comparison Tab)
+  const filteredComparisons = useMemo(() => {
+    return comparisonData.filter(item => {
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = item.student.name && String(item.student.name).toLowerCase().includes(q);
+        const matchId = item.student.id && String(item.student.id).toLowerCase().includes(q);
+        const matchAff = item.student.affiliation && String(item.student.affiliation).toLowerCase().includes(q);
+        if (!matchName && !matchId && !matchAff) return false;
+      }
+
+      if (selectedAffiliation && selectedAffiliation !== 'all') {
+        if (item.student.affiliation !== selectedAffiliation) return false;
+      }
+
+      if (selectedTrend === 'improved' && item.diff >= 0) return false;
+      if (selectedTrend === 'stable' && item.diff !== 0) return false;
+      if (selectedTrend === 'worsened' && item.diff <= 0) return false;
+
+      return true;
+    });
+  }, [comparisonData, searchQuery, selectedAffiliation, selectedTrend]);
+
+  return (
+    <div className="space-y-6">
+      {/* 🟢 หัวข้อและแถบเลือกสังกัด (ถ้ามี) */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
+        <div className="flex items-center gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-purple-500/20 shrink-0">
+            <History size={28} />
+          </div>
+          <div>
+            <h2 className="text-xl md:text-2xl font-black text-slate-800">{title}</h2>
+            <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">{subtitle}</p>
+          </div>
+        </div>
+
+        {/* ตัวเลือกสังกัด (สำหรับ Superadmin) */}
+        {availableAffiliations && availableAffiliations.length > 0 && onAffiliationChange && (
+          <div className="flex items-center gap-2 self-start md:self-auto bg-slate-50 p-2 rounded-2xl border border-slate-200">
+            <span className="text-xs font-bold text-slate-500 pl-2">สังกัด:</span>
+            <select
+              value={selectedAffiliation}
+              onChange={(e) => onAffiliationChange(e.target.value)}
+              className="bg-white px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 border border-slate-200 outline-none focus:ring-2 focus:ring-purple-400"
+            >
+              <option value="all">ทุกสังกัด / ทุกโรงเรียน</option>
+              {availableAffiliations.map(aff => (
+                <option key={aff} value={aff}>{displayAffiliation(aff)}</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {/* 🟢 การ์ดสรุปตัวชี้วัดความก้าวหน้าการติดตาม (Follow-up Funnel KPIs) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* KPI 1: ประเมินรอบแรก */}
+        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black shrink-0 border border-indigo-100">
+            <Users size={24} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-slate-400 truncate">ประเมินแรกเริ่ม (ครั้งที่ 1)</p>
+            <div className="flex items-baseline gap-2 mt-0.5">
+              <span className="text-2xl font-black text-slate-800">{summaryStats.countR1}</span>
+              <span className="text-[11px] text-slate-400 font-medium">/ {summaryStats.totalStudents} คน</span>
+            </div>
+            <p className="text-[10px] text-indigo-500 font-bold mt-1">ฐานข้อมูลตั้งต้น (Baseline)</p>
+          </div>
+        </div>
+
+        {/* KPI 2: ติดตามครั้งที่ 2 */}
+        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center font-black shrink-0 border border-sky-100">
+            <RefreshCw size={22} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-slate-400 truncate">ติดตามผล (ครั้งที่ 2)</p>
+            <div className="flex items-baseline gap-2 mt-0.5">
+              <span className="text-2xl font-black text-slate-800">{summaryStats.countR2}</span>
+              <span className="text-[11px] text-sky-600 font-bold bg-sky-50 px-2 py-0.5 rounded-full border border-sky-100">
+                {summaryStats.retentionRate}%
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">อัตราติดตามต่อเนื่องระยะ 1</p>
+          </div>
+        </div>
+
+        {/* KPI 3: ติดตาม 3 ครั้งขึ้นไป */}
+        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center font-black shrink-0 border border-purple-100">
+            <Layers size={22} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-slate-400 truncate">ติดตามต่อเนื่อง (3 ครั้ง+)</p>
+            <div className="flex items-baseline gap-2 mt-0.5">
+              <span className="text-2xl font-black text-slate-800">{summaryStats.countR3Plus}</span>
+              <span className="text-[11px] text-purple-600 font-bold bg-purple-50 px-2 py-0.5 rounded-full border border-purple-100">
+                คน
+              </span>
+            </div>
+            <p className="text-[10px] text-purple-500 font-bold mt-1">เฝ้าระวังและพัฒนาต่อเนื่อง</p>
+          </div>
+        </div>
+
+        {/* KPI 4: ผลลัพธ์พัฒนาดีขึ้น */}
+        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-black shrink-0 border border-teal-100">
+            <TrendingDown size={24} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-slate-400 truncate">สุขภาพจิตดีขึ้น (สำเร็จ)</p>
+            <div className="flex items-baseline gap-2 mt-0.5">
+              <span className="text-2xl font-black text-teal-600">{summaryStats.countImproved}</span>
+              <span className="text-[11px] text-teal-600 font-bold bg-teal-50 px-2 py-0.5 rounded-full border border-teal-100">
+                {summaryStats.successRate}%
+              </span>
+            </div>
+            <p className="text-[10px] text-teal-600 font-medium mt-1">คะแนนความเครียดลดลง</p>
+          </div>
+        </div>
+      </div>
+
+      {/* 🟢 แถบสลับมุมมอง (Tabs) และกล่องเครื่องมือฟิลเตอร์ (Toolbar) */}
+      <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-5">
+        {/* แถบสลับ Tab */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+          <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-2xl self-start sm:self-auto">
+            <button
+              onClick={() => setActiveTab('rounds')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                activeTab === 'rounds'
+                  ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <ClipboardList size={16} />
+              จำแนกตามรายการติดตามครั้งที่ ({allRoundsData.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('comparison')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                activeTab === 'comparison'
+                  ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <TrendingUp size={16} />
+              เปรียบเทียบผลสัมฤทธิ์ Pre vs Post ({comparisonData.length})
+            </button>
+          </div>
+
+          <span className="text-xs font-bold text-slate-400">
+            แสดงผล: {activeTab === 'rounds' ? filteredRounds.length : filteredComparisons.length} รายการ
+          </span>
+        </div>
+
+        {/* ตัวกรอง (Filter Controls) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* 1. ค้นหาชื่อ หรือ ID */}
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="ค้นหาชื่อ, รหัสนักเรียน..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none focus:ring-2 focus:ring-purple-400 focus:bg-white transition"
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* 2. ฟิลเตอร์รอบการติดตาม (เฉพาะแท็บ rounds) */}
+          {activeTab === 'rounds' ? (
+            <div>
+              <select
+                value={selectedRound}
+                onChange={(e) => setSelectedRound(e.target.value)}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-400"
+              >
+                <option value="all">🔍 ทุกรอบการติดตาม</option>
+                <option value="latest">⭐ เฉพาะรอบล่าสุดของแต่ละคน</option>
+                <option value="1">🌱 ติดตามครั้งที่ 1 (ประเมินแรกเริ่ม / Baseline)</option>
+                <option value="2">🔄 ติดตามครั้งที่ 2 (ติดตามผลระยะที่ 1)</option>
+                <option value="3">📊 ติดตามครั้งที่ 3 (ติดตามผลระยะที่ 2)</option>
+                <option value="4+">✨ ติดตามครั้งที่ 4 ขึ้นไป (ติดตามต่อเนื่อง)</option>
+              </select>
+            </div>
+          ) : (
+            <div className="flex items-center px-3 py-2.5 bg-purple-50/50 border border-purple-100 rounded-xl text-xs font-bold text-purple-700">
+              📌 เปรียบเทียบรอบแรก กับ รอบล่าสุด
+            </div>
+          )}
+
+          {/* 3. ฟิลเตอร์แนวโน้มผลลัพธ์ (ดีขึ้น/คงที่/เพิ่มขึ้น) */}
+          <div>
+            <select
+              value={selectedTrend}
+              onChange={(e) => setSelectedTrend(e.target.value)}
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-400"
+            >
+              <option value="all">📈 ทุกแนวโน้มผลลัพธ์</option>
+              <option value="improved">🟢 ความเครียดลดลง (สุขภาพจิตดีขึ้น)</option>
+              <option value="stable">⚪ คงที่ (ไม่มีการเปลี่ยนแปลง)</option>
+              <option value="worsened">🔴 ความเครียดเพิ่มขึ้น (ควรเฝ้าระวัง)</option>
+            </select>
+          </div>
+
+          {/* 4. ฟิลเตอร์ระดับความเสี่ยง ST-5 */}
+          {activeTab === 'rounds' ? (
+            <div>
+              <select
+                value={selectedRisk}
+                onChange={(e) => setSelectedRisk(e.target.value)}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-400"
+              >
+                <option value="all">🎯 ทุกระดับความเครียด</option>
+                <option value="Low">🟢 เครียดน้อย (ปกติ 0-4)</option>
+                <option value="Mild">🟡 เครียดปานกลาง (5-7)</option>
+                <option value="Moderate">🟠 เครียดมาก (8-9)</option>
+                <option value="Severe">🔴 เครียดมากที่สุด (10-15)</option>
+              </select>
+            </div>
+          ) : (
+            <div className="flex items-center justify-end">
+              {(selectedTrend !== 'all' || searchQuery) && (
+                <button
+                  onClick={() => { setSelectedTrend('all'); setSearchQuery(''); }}
+                  className="text-xs font-bold text-purple-600 hover:text-purple-700 underline"
+                >
+                  ล้างตัวกรองทั้งหมด
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ปุ่มลัดเลือกรายการติดตามครั้งที่ (Quick Pills Filter) */}
+        {activeTab === 'rounds' && (
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-1 hide-scrollbar">
+            <span className="text-[11px] font-bold text-slate-400 shrink-0">เลือกรอบด่วน:</span>
+            {[
+              { id: 'all', label: 'ทุกรอบ' },
+              { id: 'latest', label: 'รอบล่าสุด' },
+              { id: '1', label: 'ครั้งที่ 1 (แรกเริ่ม)' },
+              { id: '2', label: 'ครั้งที่ 2' },
+              { id: '3', label: 'ครั้งที่ 3' },
+              { id: '4+', label: 'ครั้งที่ 4+' },
+            ].map(pill => (
+              <button
+                key={pill.id}
+                onClick={() => setSelectedRound(pill.id)}
+                className={`px-3 py-1 rounded-full text-xs font-bold transition whitespace-nowrap border ${
+                  selectedRound === pill.id
+                    ? 'bg-purple-100 text-purple-700 border-purple-300'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
+
+            {(selectedRound !== 'all' || selectedTrend !== 'all' || selectedRisk !== 'all' || searchQuery) && (
+              <button
+                onClick={() => { setSelectedRound('all'); setSelectedTrend('all'); setSelectedRisk('all'); setSearchQuery(''); }}
+                className="ml-auto text-xs font-bold text-rose-500 hover:text-rose-600 px-3 py-1 rounded-full border border-rose-200 hover:bg-rose-50 transition shrink-0"
+              >
+                ล้างตัวกรอง
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 🟢 ส่วนตารางแสดงข้อมูล (Data Tables) */}
+      {activeTab === 'rounds' ? (
+        /* TAB 1: จำแนกตามรายการติดตามครั้งที่ (Round-by-Round Breakdown) */
+        <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+          {filteredRounds.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[850px]">
+                <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 text-xs font-bold">
+                  <tr>
+                    <th className="p-4 pl-6">ชื่อ-สกุล / ข้อมูลผู้เรียน</th>
+                    {showAffiliation && <th className="p-4">สังกัด/โรงเรียน</th>}
+                    <th className="p-4 text-center">รายการติดตามครั้งที่</th>
+                    <th className="p-4 text-center">คะแนน ST-5 & ระดับ</th>
+                    <th className="p-4 text-center">ความเปลี่ยนแปลง (จากรอบก่อน)</th>
+                    <th className="p-4 text-center">กิจกรรมเชิงบวก</th>
+                    <th className="p-4 pr-6 text-right">การจัดการ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {filteredRounds.map((row, idx) => {
+                    return (
+                      <tr key={row.id} className="hover:bg-purple-50/30 transition-colors">
+                        {/* 1. ข้อมูลผู้เรียน */}
+                        <td className="p-4 pl-6">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-full bg-slate-100 text-purple-600 font-bold flex items-center justify-center text-xs shrink-0 border border-slate-200">
+                              {idx + 1}
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-800">
+                                {onSelectStudent ? (
+                                  <button
+                                    onClick={() => onSelectStudent(row.student.id)}
+                                    className="hover:text-purple-600 hover:underline transition text-left"
+                                  >
+                                    {row.student.name}
+                                  </button>
+                                ) : (
+                                  row.student.name
+                                )}
+                              </p>
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-[10px] text-slate-400 font-mono">@{row.student.id}</span>
+                                <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-md">
+                                  ทำแล้ว {row.totalRounds} ครั้ง
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* 2. สังกัด */}
+                        {showAffiliation && (
+                          <td className="p-4 text-xs font-medium text-slate-600">
+                            {displayAffiliation(row.student.affiliation)}
+                          </td>
+                        )}
+
+                        {/* 3. รายการติดตามครั้งที่ */}
+                        <td className="p-4 text-center">
+                          <div className="inline-flex flex-col items-center">
+                            <span className={`px-3 py-1 rounded-full text-xs font-black border shadow-xs ${
+                              row.roundNumber === 1
+                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                : row.roundNumber === 2
+                                ? 'bg-sky-50 text-sky-700 border-sky-200'
+                                : row.roundNumber === 3
+                                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                : 'bg-teal-50 text-teal-700 border-teal-200'
+                            }`}>
+                              ติดตามครั้งที่ {row.roundNumber}
+                            </span>
+                            <div className="flex items-center gap-1 mt-1 text-[11px] text-slate-400 font-medium">
+                              <Calendar size={12} />
+                              {new Date(row.timestamp).toLocaleDateString('th-TH', { dateStyle: 'short' })}
+                              {row.isLatest && row.totalRounds > 1 && (
+                                <span className="text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.2 rounded-md ml-1">
+                                  ล่าสุด
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* 4. คะแนน ST-5 & ระดับ */}
+                        <td className="p-4 text-center">
+                          <div className="inline-flex flex-col items-center">
+                            <span className="text-base font-black text-slate-800">
+                              {row.score} <span className="text-[10px] text-slate-400 font-normal">/ 15</span>
+                            </span>
+                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border shadow-xs mt-1 ${row.status.color}`}>
+                              {row.status.level}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* 5. ความเปลี่ยนแปลงจากรอบก่อนหน้า */}
+                        <td className="p-4 text-center">
+                          {row.diffFromPrev === null ? (
+                            <span className="text-xs font-semibold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-lg">
+                              จุดเริ่มต้น (Baseline)
+                            </span>
+                          ) : row.diffFromPrev < 0 ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-bold text-teal-600 bg-teal-50 px-2.5 py-1 rounded-lg border border-teal-100">
+                              <TrendingDown size={14} /> ลดลง {Math.abs(row.diffFromPrev)} (ดีขึ้น)
+                            </span>
+                          ) : row.diffFromPrev > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-100">
+                              <TrendingUp size={14} /> เพิ่ม {row.diffFromPrev} (เฝ้าระวัง)
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200">
+                              <Minus size={14} /> คงที่ ({row.score})
+                            </span>
+                          )}
+                        </td>
+
+                        {/* 6. กิจกรรมเชิงบวก */}
+                        <td className="p-4 text-center">
+                          {row.positiveCount > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-bold text-teal-700 bg-teal-50 px-2.5 py-1 rounded-lg border border-teal-100">
+                              <CheckCircle2 size={13} /> {row.positiveCount} ครั้ง ({row.desirableItemsCount} ข้อ)
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-300">-</span>
+                          )}
+                        </td>
+
+                        {/* 7. Action */}
+                        <td className="p-4 pr-6 text-right">
+                          {onSelectStudent ? (
+                            <button
+                              onClick={() => onSelectStudent(row.student.id)}
+                              className="text-xs font-bold text-purple-600 hover:text-purple-700 hover:bg-purple-50 px-3 py-1.5 rounded-xl border border-purple-200 transition inline-flex items-center gap-1"
+                            >
+                              ดูรายละเอียด <ChevronRight size={14} />
+                            </button>
+                          ) : (
+                            <span className="text-xs text-slate-400">ครบถ้วน</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-12 text-center">
+              <ClipboardList className="mx-auto text-slate-300 mb-3" size={48} />
+              <h3 className="font-bold text-slate-700 text-base">ไม่พบข้อมูลรายการติดตามตามเงื่อนไขที่เลือก</h3>
+              <p className="text-slate-400 text-xs mt-1">ลองเปลี่ยนรอบการติดตาม หรือล้างคำค้นหาดูนะคะ</p>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* TAB 2: เปรียบเทียบผลสัมฤทธิ์ก่อน-หลัง (Pre vs Post) */
+        <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+          {filteredComparisons.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[850px]">
+                <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 text-xs font-bold">
+                  <tr>
+                    <th className="p-4 pl-6">ชื่อ-สกุล / ข้อมูลผู้เรียน</th>
+                    {showAffiliation && <th className="p-4">สังกัด/โรงเรียน</th>}
+                    <th className="p-4 text-center">รอบที่ติดตามทั้งหมด</th>
+                    <th className="p-4 text-center">กิจกรรมเชิงบวก</th>
+                    <th className="p-4 text-center">ก่อนทำกิจกรรม<br/><span className="text-[10px] font-normal text-slate-400">(ST-5 แรก)</span></th>
+                    <th className="p-4 text-center">หลังทำกิจกรรม<br/><span className="text-[10px] font-normal text-slate-400">(ST-5 ล่าสุด)</span></th>
+                    <th className="p-4 text-center">ผลลัพธ์ภาพรวม</th>
+                    <th className="p-4 pr-6 text-right">การจัดการ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {filteredComparisons.map((row, idx) => (
+                    <tr key={`comp-${row.student.id}-${idx}`} className="hover:bg-purple-50/30 transition-colors">
+                      <td className="p-4 pl-6 font-bold text-slate-800">
+                        {onSelectStudent ? (
+                          <button
+                            onClick={() => onSelectStudent(row.student.id)}
+                            className="hover:text-purple-600 hover:underline transition text-left"
+                          >
+                            {row.student.name}
+                          </button>
+                        ) : (
+                          row.student.name
+                        )}
+                        <p className="text-[10px] text-slate-400 font-mono mt-0.5">@{row.student.id}</p>
+                      </td>
+                      {showAffiliation && (
+                        <td className="p-4 text-xs font-medium text-slate-600">
+                          {displayAffiliation(row.student.affiliation)}
+                        </td>
+                      )}
+                      <td className="p-4 text-center">
+                        <span className="bg-purple-50 text-purple-700 px-3 py-1 rounded-full text-xs font-black border border-purple-200">
+                          ติดตาม {row.totalRounds} ครั้ง
+                        </span>
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className="bg-teal-50 text-teal-600 px-2.5 py-1 rounded-lg text-xs font-bold border border-teal-100">
+                          {row.interventions} ครั้ง
+                        </span>
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className="font-black text-slate-700">{row.preScore}</span>
+                        <div className="text-[10px] text-slate-400">{row.preStatus.level}</div>
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className="font-black text-slate-800">{row.postScore}</span>
+                        <div className="text-[10px] text-slate-400">{row.postStatus.level}</div>
+                      </td>
+                      <td className="p-4 text-center">
+                        {row.diff < 0 ? (
+                          <span className="text-teal-600 font-bold flex items-center justify-center gap-1 text-xs bg-teal-50 px-2.5 py-1 rounded-lg border border-teal-100 w-max mx-auto">
+                            <TrendingDown size={14}/> ลดลง {Math.abs(row.diff)} (ดีขึ้น)
+                          </span>
+                        ) : row.diff > 0 ? (
+                          <span className="text-rose-600 font-bold flex items-center justify-center gap-1 text-xs bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-100 w-max mx-auto">
+                            <TrendingUp size={14}/> เพิ่ม {row.diff} (เฝ้าระวัง)
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 font-bold flex items-center justify-center gap-1 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200 w-max mx-auto">
+                            <Minus size={14}/> คงที่ ({row.postScore})
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4 pr-6 text-right">
+                        {onSelectStudent && (
+                          <button
+                            onClick={() => onSelectStudent(row.student.id)}
+                            className="text-xs font-bold text-purple-600 hover:text-purple-700 hover:bg-purple-50 px-3 py-1.5 rounded-xl border border-purple-200 transition inline-flex items-center gap-1"
+                          >
+                            เจาะลึก <ChevronRight size={14} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-12 text-center">
+              <Activity className="mx-auto text-slate-300 mb-3" size={48} />
+              <h3 className="font-bold text-slate-700 text-base">ยังไม่มีข้อมูลนักเรียนที่ได้รับการประเมินเปรียบเทียบ</h3>
+              <p className="text-slate-400 text-xs mt-1">ระบบจะแสดงผลเมื่อนักเรียนได้รับการติดตามประเมิน ST-5 อย่างน้อย 2 ครั้ง</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==========================================
 // ADMIN DASHBOARD
 // ==========================================
 function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, triggerConfirm, triggerDownloadConsentPdf }) {
   const [selectedUserId, setSelectedUserId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [roundFilter, setRoundFilter] = useState('all'); // 'all', '1', '2', '3+', '0'
   
   // กรองผู้ใช้งานในสังกัด และจัดเรียงตามชื่อ ก-ฮ
   const students = users
     .filter(u => ['student', 'community', 'teacher'].includes(u.accountType) && u.affiliation === profile.affiliation)
     .sort((a, b) => a.name.localeCompare(b.name, 'th'));
 
-  // ค้นหา
-  const filteredStudents = students.filter(u => 
-    (u.name && String(u.name).toLowerCase().includes(searchQuery.toLowerCase())) || 
-    (u.id && String(u.id).toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  // คำนวณจำนวนรอบสำหรับแต่ละคนเพื่อใช้ใน Filter Pills
+  const countsStats = useMemo(() => {
+    let r0 = 0, r1 = 0, r2 = 0, r3Plus = 0;
+    students.forEach(student => {
+      const c = st5Data.filter(d => d.uid === student.id || d.userId === student.id).length;
+      if (c === 0) r0++;
+      else if (c === 1) r1++;
+      else if (c === 2) r2++;
+      else if (c >= 3) r3Plus++;
+    });
+    return { r0, r1, r2, r3Plus, total: students.length };
+  }, [students, st5Data]);
+
+  // ค้นหาและกรองตามรอบการติดตาม
+  const filteredStudents = useMemo(() => {
+    return students.filter(u => {
+      const matchSearch = 
+        (u.name && String(u.name).toLowerCase().includes(searchQuery.toLowerCase())) || 
+        (u.id && String(u.id).toLowerCase().includes(searchQuery.toLowerCase()));
+      if (!matchSearch) return false;
+
+      const st5Count = st5Data.filter(d => d.uid === u.id || d.userId === u.id).length;
+      if (roundFilter === '0') return st5Count === 0;
+      if (roundFilter === '1') return st5Count === 1;
+      if (roundFilter === '2') return st5Count === 2;
+      if (roundFilter === '3+') return st5Count >= 3;
+      return true;
+    });
+  }, [students, searchQuery, roundFilter, st5Data]);
 
   const selectedUser = users.find(u => u.id === selectedUserId);
-
-  const comparisonData = useMemo(() => {
-    return filteredStudents.map(student => {
-        const studentSt5 = st5Data.filter(d => d.uid === student.id || d.userId === student.id).sort((a, b) => a.timestamp - b.timestamp);
-        const positiveBehaviors = behaviorData.filter(d => d.targetUid === student.id && d.selections?.desirable?.length > 0);
-        
-        if (studentSt5.length >= 2 && positiveBehaviors.length >= 1) {
-            const preTest = studentSt5[0];
-            const postTest = studentSt5[studentSt5.length - 1];
-            
-            return {
-                student,
-                preScore: parseInt(preTest.score) || 0,
-                postScore: parseInt(postTest.score) || 0,
-                diff: (parseInt(postTest.score) || 0) - (parseInt(preTest.score) || 0),
-                interventions: positiveBehaviors.length
-            };
-        }
-        return null;
-    }).filter(Boolean);
-  }, [filteredStudents, st5Data, behaviorData]);
 
   return (
     <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100vh-160px)]">
       {/* 1. Sidebar แสดงรายชื่อ */}
-      <div className={`w-full lg:w-[400px] flex-shrink-0 flex flex-col gap-4 ${selectedUser ? 'hidden lg:flex' : 'flex'}`}>
+      <div className={`w-full lg:w-[420px] flex-shrink-0 flex flex-col gap-4 ${selectedUser ? 'hidden lg:flex' : 'flex'}`}>
         <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 shrink-0">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><ClipboardList className="text-purple-400"/> รายชื่อในความดูแล</h2>
@@ -1441,17 +2196,51 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
              </div>
              
              {/* Filter Input */}
-             <div className="relative mt-2">
+             <div className="relative mt-1">
                 <input 
                   type="text" 
                   placeholder="ค้นหารายชื่อ หรือ ID..." 
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-4 focus:ring-purple-500/20 focus:border-purple-400 outline-none transition-all font-medium text-slate-700"
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-4 focus:ring-purple-500/20 focus:border-purple-400 outline-none transition-all font-medium text-slate-700"
                 />
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
+             </div>
+
+             {/* Quick Filter Pills: จำแนกตามรายการติดตามครั้งที่ */}
+             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 hide-scrollbar pt-1">
+               <button 
+                 onClick={() => setRoundFilter('all')}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === 'all' ? 'bg-purple-600 text-white border-purple-600 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
+               >
+                 ทั้งหมด ({countsStats.total})
+               </button>
+               <button 
+                 onClick={() => setRoundFilter('1')}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '1' ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
+               >
+                 รอบแรก ({countsStats.r1})
+               </button>
+               <button 
+                 onClick={() => setRoundFilter('2')}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '2' ? 'bg-sky-600 text-white border-sky-600 shadow-xs' : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'}`}
+               >
+                 ติดตาม 2 ครั้ง ({countsStats.r2})
+               </button>
+               <button 
+                 onClick={() => setRoundFilter('3+')}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '3+' ? 'bg-purple-600 text-white border-purple-600 shadow-xs' : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'}`}
+               >
+                 ติดตาม 3 ครั้ง+ ({countsStats.r3Plus})
+               </button>
+               <button 
+                 onClick={() => setRoundFilter('0')}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '0' ? 'bg-slate-700 text-white border-slate-700 shadow-xs' : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'}`}
+               >
+                 ยังไม่ประเมิน ({countsStats.r0})
+               </button>
              </div>
           </div>
         </div>
@@ -1466,8 +2255,8 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
             return (
               <div key={`${student.id}-${index}`} onClick={() => setSelectedUserId(student.id)} 
                    className={`p-4 rounded-[2rem] shadow-sm border flex justify-between items-center hover:shadow-md transition-all cursor-pointer group transform hover:-translate-y-0.5 ${isSelected ? 'bg-purple-50 border-purple-200 ring-2 ring-purple-400/20' : 'bg-white border-slate-100 hover:border-purple-200'}`}>
-                <div className="flex items-center gap-4 overflow-hidden">
-                  <div className={`w-12 h-12 shrink-0 rounded-full flex items-center justify-center font-black text-lg shadow-inner border border-white transition-colors ${isSelected ? 'bg-purple-500 text-white' : 'bg-gradient-to-br from-purple-100 to-pink-100 text-purple-500'}`}>
+                <div className="flex items-center gap-3.5 overflow-hidden">
+                  <div className={`w-11 h-11 shrink-0 rounded-full flex items-center justify-center font-black text-base shadow-inner border border-white transition-colors ${isSelected ? 'bg-purple-500 text-white' : 'bg-gradient-to-br from-purple-100 to-pink-100 text-purple-500'}`}>
                     {index + 1}
                   </div>
                   <div className="min-w-0">
@@ -1476,7 +2265,19 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
                       <span className="text-[9px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md">
                         {student.accountType === 'student' ? 'นักเรียน' : student.accountType === 'teacher' ? 'ครู' : 'ชุมชน'}
                       </span>
-                      {st5Count > 0 && <span className="text-[9px] font-bold bg-teal-50 text-teal-600 px-1.5 py-0.5 rounded-md border border-teal-100">ST-5: {st5Count}</span>}
+                      {st5Count >= 2 ? (
+                        <span className="text-[9px] font-bold bg-teal-50 text-teal-700 px-2 py-0.5 rounded-md border border-teal-200 flex items-center gap-1">
+                          🔄 ติดตาม {st5Count} ครั้ง
+                        </span>
+                      ) : st5Count === 1 ? (
+                        <span className="text-[9px] font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md border border-indigo-200">
+                          🌱 ประเมินรอบแรก
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-bold bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-md">
+                          ยังไม่ประเมิน
+                        </span>
+                      )}
                       {behCount > 0 && <span className="text-[9px] font-bold bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded-md border border-orange-100">พฤติกรรม: {behCount}</span>}
                     </div>
                   </div>
@@ -1490,14 +2291,14 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
           {filteredStudents.length === 0 && (
             <div className="bg-white p-8 rounded-[2rem] text-center border-2 border-dashed border-slate-200">
               <Users className="mx-auto text-slate-300 mb-3" size={36} />
-              <p className="text-slate-500 font-medium text-sm">ไม่พบรายชื่อที่ค้นหา</p>
+              <p className="text-slate-500 font-medium text-sm">ไม่พบรายชื่อตามเงื่อนไขที่เลือก</p>
             </div>
           )}
         </div>
       </div>
 
       {/* 2. Main Content Area */}
-      <div className={`w-full lg:flex-1 overflow-y-auto hide-scrollbar bg-slate-50/50 rounded-[2.5rem] border border-slate-100 relative ${!selectedUser ? 'hidden lg:flex items-center justify-center' : 'block'}`}>
+      <div className={`w-full lg:flex-1 overflow-y-auto hide-scrollbar bg-slate-50/50 rounded-[2.5rem] border border-slate-100 relative ${!selectedUser ? 'hidden lg:block' : 'block'}`}>
         {selectedUser ? (
           <div className="p-4 md:p-6 lg:p-8 min-h-full">
             <AdminStudentDetail 
@@ -1511,66 +2312,277 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
             />
           </div>
         ) : (
-          <div className="p-6 lg:p-8 h-full flex flex-col items-center">
-            <div className="text-center mb-8 w-full max-w-2xl">
-              <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-slate-100">
-                <TrendingUp size={40} className="text-teal-400" strokeWidth={1.5} />
-              </div>
-              <h3 className="text-2xl font-black text-slate-800 mb-2">ผลสัมฤทธิ์การปรับเปลี่ยนพฤติกรรม</h3>
-              <p className="text-slate-500 font-medium text-sm">ตารางเปรียบเทียบผลประเมินสุขภาพจิต (ST-5) ก่อนและหลังการทำกิจกรรมเชิงบวก (Behavioral Intervention)</p>
-            </div>
-
-            {comparisonData.length > 0 ? (
-                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden w-full max-w-3xl flex flex-col max-h-[60vh]">
-                    <div className="overflow-y-auto hide-scrollbar">
-                        <table className="w-full text-left">
-                            <thead className="bg-slate-50 border-b border-slate-100 sticky top-0 z-10">
-                                <tr>
-                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider">ชื่อ-สกุล</th>
-                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">กิจกรรมเชิงบวก</th>
-                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">ก่อนทำกิจกรรม<br/><span className="text-[9px] font-medium text-slate-400">(ST-5 แรก)</span></th>
-                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">หลังทำกิจกรรม<br/><span className="text-[9px] font-medium text-slate-400">(ST-5 ล่าสุด)</span></th>
-                                    <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">ผลลัพธ์</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-50">
-                                {comparisonData.map((row, idx) => (
-                                    <tr key={`comp-${row.student.id}-${idx}`} className="hover:bg-slate-50/50 transition">
-                                        <td className="p-4 text-sm font-bold text-slate-700">
-                                            <button onClick={() => setSelectedUserId(row.student.id)} className="hover:text-purple-600 transition flex items-center gap-2">
-                                                {row.student.name} <ChevronRight size={14} className="text-slate-300" />
-                                            </button>
-                                        </td>
-                                        <td className="p-4 text-center">
-                                            <span className="bg-teal-50 text-teal-600 px-2.5 py-1 rounded-lg text-xs font-bold border border-teal-100">{row.interventions} ครั้ง</span>
-                                        </td>
-                                        <td className="p-4 text-center font-black text-slate-600">{row.preScore}</td>
-                                        <td className="p-4 text-center font-black text-slate-800">{row.postScore}</td>
-                                        <td className="p-4 text-center">
-                                            {row.diff < 0 ? (
-                                                <span className="text-teal-500 font-bold flex items-center justify-center gap-1 text-sm bg-teal-50 px-2 py-1 rounded-lg border border-teal-100 w-max mx-auto"><TrendingDown size={14}/> ลดลง {Math.abs(row.diff)}</span>
-                                            ) : row.diff > 0 ? (
-                                                <span className="text-rose-500 font-bold flex items-center justify-center gap-1 text-sm bg-rose-50 px-2 py-1 rounded-lg border border-rose-100 w-max mx-auto"><TrendingUp size={14}/> เพิ่ม {row.diff}</span>
-                                            ) : (
-                                                <span className="text-slate-400 font-bold flex items-center justify-center gap-1 text-sm bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 w-max mx-auto"><Minus size={14}/> คงที่</span>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            ) : (
-                <div className="bg-white p-8 rounded-3xl border border-dashed border-slate-200 text-center w-full max-w-2xl">
-                    <Activity className="mx-auto text-slate-300 mb-4" size={48} />
-                    <p className="text-slate-500 font-medium mb-2">ยังไม่มีข้อมูลเปรียบเทียบผลสัมฤทธิ์</p>
-                    <p className="text-slate-400 text-sm max-w-sm mx-auto leading-relaxed">ระบบจะแสดงผลเมื่อนักเรียนมีการประเมิน ST-5 อย่างน้อย 2 ครั้ง และมีการบันทึกพฤติกรรมเชิงบวกสำเร็จ</p>
-                </div>
-            )}
+          <div className="p-4 md:p-6 lg:p-8 min-h-full">
+            <FollowUpTrackerView 
+              students={students}
+              st5Data={st5Data}
+              behaviorData={behaviorData}
+              onSelectStudent={(id) => setSelectedUserId(id)}
+              showAffiliation={false}
+              title="ภาพรวมและจำแนกการติดตามประเมินผล"
+              subtitle={`สังกัด: ${profile.affiliation} • วิเคราะห์ข้อมูลการคัดกรองสุขภาพจิต (ST-5) และพฤติกรรมเชิงบวก แยกตามรายการติดตามครั้งที่`}
+            />
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function StudentST5TrendChart({ st5History, studentName }) {
+  const trendData = useMemo(() => {
+    if (!st5History || st5History.length === 0) return [];
+    // เรียงตามเวลาจากอดีตไปปัจจุบัน (ครั้งที่ 1 ไปจนถึงครั้งล่าสุด)
+    const sorted = [...st5History].sort((a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0));
+    return sorted.map((item, idx) => {
+      const score = Number(item.score) || 0;
+      const status = calculateST5(score);
+      const dateFormatted = item.timestamp 
+        ? new Date(item.timestamp).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })
+        : '';
+      const roundNum = idx + 1;
+      return {
+        roundNum,
+        roundLabel: `ครั้งที่ ${roundNum}`,
+        date: dateFormatted,
+        fullLabel: `ครั้งที่ ${roundNum}${dateFormatted ? ` (${dateFormatted})` : ''}`,
+        score,
+        level: item.level || status.level,
+        risk: status.risk,
+        color: status.color,
+        badge: status.badge,
+        timestamp: item.timestamp,
+        suggestion: item.suggestion || ''
+      };
+    });
+  }, [st5History]);
+
+  const stats = useMemo(() => {
+    if (trendData.length === 0) return null;
+    const initial = trendData[0];
+    const latest = trendData[trendData.length - 1];
+    const totalRounds = trendData.length;
+    const avgScore = (trendData.reduce((sum, item) => sum + item.score, 0) / totalRounds).toFixed(1);
+    const diff = latest.score - initial.score;
+    const latestStatus = calculateST5(latest.score);
+
+    let analysis = '';
+    if (totalRounds === 1) {
+      analysis = `ประเมินครั้งแรกได้คะแนน ${latest.score}/15 (${latestStatus.level}) ให้ติดตามประเมินรอบถัดไปเพื่อเริ่มวิเคราะห์แนวโน้ม`;
+    } else if (diff < 0) {
+      analysis = `แนวโน้มดีขึ้น! คะแนนความเครียดลดลง ${Math.abs(diff)} คะแนน (จากครั้งแรก ${initial.score} ➔ ครั้งล่าสุด ${latest.score}) สะท้อนถึงการปรับเปลี่ยนเชิงบวกที่มีประสิทธิผล`;
+    } else if (diff > 0) {
+      analysis = `ควรเฝ้าระวัง: คะแนนความเครียดเพิ่มขึ้น ${diff} คะแนน (จากครั้งแรก ${initial.score} ➔ ครั้งล่าสุด ${latest.score}) แนะนำให้พูดคุยเพิ่มเติมและส่งเสริมกิจกรรมผ่อนคลาย`;
+    } else {
+      analysis = `ระดับความเครียดคงที่อยู่ที่ ${latest.score}/15 (${latestStatus.level}) ตลอดการประเมิน`;
+    }
+
+    return {
+      initial,
+      latest,
+      totalRounds,
+      avgScore,
+      diff,
+      latestStatus,
+      analysis
+    };
+  }, [trendData]);
+
+  if (!st5History || st5History.length === 0) {
+    return (
+      <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100 text-center">
+        <div className="w-16 h-16 bg-purple-50 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-purple-100 text-purple-400">
+          <TrendingUp size={30} />
+        </div>
+        <h3 className="text-lg font-black text-slate-800 mb-1">ยังไม่มีข้อมูลแนวโน้มสุขภาพจิต (ST-5)</h3>
+        <p className="text-sm text-slate-400 font-medium max-w-md mx-auto">
+          เมื่อนักเรียนได้รับการประเมินสุขภาพจิต ST-5 กราฟเส้น (AreaChart) จะแสดงแนวโน้มคะแนนย้อนหลังและการวิเคราะห์พัฒนาการที่นี่โดยอัตโนมัติ
+        </p>
+      </div>
+    );
+  }
+
+  const CustomTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      const data = payload[0].payload;
+      return (
+        <div className="bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-purple-100 min-w-[210px] z-50">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2.5">
+            <span className="text-xs font-black text-purple-700">{data.roundLabel}</span>
+            {data.date && <span className="text-[11px] font-semibold text-slate-400">{data.date}</span>}
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between gap-4">
+              <span className="text-xs text-slate-500 font-medium">คะแนน ST-5:</span>
+              <span className="text-base font-black text-slate-800">{data.score} <span className="text-[11px] text-slate-400 font-normal">/ 15</span></span>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-xs text-slate-500 font-medium">ระดับความเครียด:</span>
+              <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shadow-xs ${data.color}`}>
+                {data.level}
+              </span>
+            </div>
+            {data.suggestion && (
+              <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-600 line-clamp-2 italic">
+                "{data.suggestion}"
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100 shadow-sm shrink-0">
+            <TrendingUp size={24} />
+          </div>
+          <div>
+            <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+              แนวโน้มคะแนนสุขภาพจิต ST-5 ย้อนหลัง
+            </h3>
+            <p className="text-xs text-slate-400 font-medium mt-0.5">
+              กราฟแสดงทิศทางการเปลี่ยนแปลงคะแนนความเครียดตามลำดับการประเมิน (0-15 คะแนน)
+            </p>
+          </div>
+        </div>
+        {stats && (
+          <div className="flex items-center gap-2 self-start sm:self-center">
+            <span className={`px-4 py-1.5 rounded-full text-xs font-bold border shadow-sm ${stats.latestStatus.color}`}>
+              สถานะล่าสุด: {stats.latestStatus.level} ({stats.latest.score}/15)
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Quick Summary Metric Cards */}
+      {stats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
+            <span className="text-[11px] font-bold text-slate-400 block mb-1">จำนวนครั้งประเมิน</span>
+            <span className="text-xl font-black text-slate-800">{stats.totalRounds} <span className="text-xs font-normal text-slate-400">ครั้ง</span></span>
+          </div>
+          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
+            <span className="text-[11px] font-bold text-slate-400 block mb-1">คะแนนครั้งแรก</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-xl font-black text-slate-700">{stats.initial.score}</span>
+              <span className="text-[11px] text-slate-400 font-medium">/ 15</span>
+            </div>
+          </div>
+          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
+            <span className="text-[11px] font-bold text-slate-400 block mb-1">คะแนนเฉลี่ย</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-xl font-black text-purple-600">{stats.avgScore}</span>
+              <span className="text-[11px] text-slate-400 font-medium">/ 15</span>
+            </div>
+          </div>
+          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
+            <span className="text-[11px] font-bold text-slate-400 block mb-1">การเปลี่ยนแปลง</span>
+            {stats.totalRounds > 1 ? (
+              stats.diff < 0 ? (
+                <span className="text-sm font-black text-teal-600 flex items-center gap-1">
+                  <TrendingDown size={18} /> ลดลง {Math.abs(stats.diff)}
+                </span>
+              ) : stats.diff > 0 ? (
+                <span className="text-sm font-black text-rose-500 flex items-center gap-1">
+                  <TrendingUp size={18} /> เพิ่ม {stats.diff}
+                </span>
+              ) : (
+                <span className="text-sm font-black text-slate-500 flex items-center gap-1">
+                  <Minus size={18} /> คงที่ (0)
+                </span>
+              )
+            ) : (
+              <span className="text-xs font-bold text-slate-400">ประเมินครั้งแรก</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* AreaChart Container */}
+      <div className="w-full bg-slate-50/50 p-4 md:p-6 rounded-3xl border border-slate-100">
+        <div className="h-64 sm:h-72 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={trendData} margin={{ top: 15, right: 15, left: -15, bottom: 5 }}>
+              <defs>
+                <linearGradient id="st5StudentGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis 
+                dataKey="roundLabel" 
+                tickLine={false} 
+                axisLine={{ stroke: '#cbd5e1' }}
+                tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }}
+              />
+              <YAxis 
+                domain={[0, 15]} 
+                ticks={[0, 4, 7, 9, 15]} 
+                tickLine={false} 
+                axisLine={{ stroke: '#cbd5e1' }}
+                tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }}
+              />
+              <Tooltip content={(props: any) => <CustomTooltip {...props} />} />
+              <ReferenceLine y={4} stroke="#14b8a6" strokeDasharray="4 4" strokeWidth={1.5} />
+              <ReferenceLine y={7} stroke="#f59e0b" strokeDasharray="4 4" strokeWidth={1.5} />
+              <ReferenceLine y={9} stroke="#f43f5e" strokeDasharray="4 4" strokeWidth={1.5} />
+              <Area 
+                type="monotone" 
+                dataKey="score" 
+                stroke="#8b5cf6" 
+                strokeWidth={3} 
+                fill="url(#st5StudentGradient)" 
+                activeDot={{ r: 6, fill: '#8b5cf6', stroke: '#ffffff', strokeWidth: 3 }}
+                dot={{ r: 4, fill: '#8b5cf6', stroke: '#ffffff', strokeWidth: 2 }}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Legend for ST-5 Thresholds */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-200/60 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-slate-400 font-bold text-[11px]">เกณฑ์ระดับคะแนน ST-5:</span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 text-teal-700 text-[11px] font-bold border border-teal-200">
+              <span className="w-2 h-2 rounded-full bg-teal-500"></span> 0-4 เครียดน้อย (ปกติ)
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 text-[11px] font-bold border border-amber-200">
+              <span className="w-2 h-2 rounded-full bg-amber-400"></span> 5-7 เครียดปานกลาง
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 text-[11px] font-bold border border-rose-200">
+              <span className="w-2 h-2 rounded-full bg-rose-400"></span> 8-9 เครียดมาก
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-50 text-red-700 text-[11px] font-bold border border-red-200">
+              <span className="w-2 h-2 rounded-full bg-red-500"></span> 10-15 เครียดมากที่สุด
+            </span>
+          </div>
+          {stats.totalRounds === 1 && (
+            <span className="text-[11px] text-purple-600 font-semibold italic">
+              * ประเมินครั้งถัดไปเพื่อแสดงกราฟเปรียบเทียบแนวโน้ม
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Analysis Insight Box */}
+      {stats && (
+        <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-start gap-3">
+          <Sparkles size={18} className="text-purple-600 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <span className="text-[11px] font-black text-purple-800 uppercase tracking-wider block">บทวิเคราะห์แนวโน้มสุขภาพจิต</span>
+            <p className="text-xs font-semibold text-purple-900 leading-relaxed">
+              {stats.analysis}
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1583,6 +2595,18 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
   const [viewingSt5Result, setViewingSt5Result] = useState(null); 
   const [viewingBehaviorResult, setViewingBehaviorResult] = useState(null);
   const [editingUser, setEditingUser] = useState(false);
+  const [st5RoundFilter, setSt5RoundFilter] = useState('all');
+  const [behaviorRoundFilter, setBehaviorRoundFilter] = useState('all');
+
+  const filteredSt5History = useMemo(() => {
+    if (st5RoundFilter === 'all') return st5History;
+    return st5History.filter((_, idx) => (st5History.length - idx).toString() === st5RoundFilter);
+  }, [st5History, st5RoundFilter]);
+
+  const filteredBehaviorHistory = useMemo(() => {
+    if (behaviorRoundFilter === 'all') return behaviorHistory;
+    return behaviorHistory.filter((_, idx) => (behaviorHistory.length - idx).toString() === behaviorRoundFilter);
+  }, [behaviorHistory, behaviorRoundFilter]);
 
   const handleSaveUser = async (uid, updatedData) => {
     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid), updatedData);
@@ -1718,17 +2742,56 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
         />
       )}
 
+      {/* 📊 กราฟเส้น (AreaChart) แสดงแนวโน้มคะแนน ST-5 ย้อนหลัง */}
+      <StudentST5TrendChart st5History={st5History} studentName={student.name} />
+
       <div className="grid lg:grid-cols-2 gap-6">
         <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-          <h3 className="font-black text-lg mb-6 text-slate-800 flex items-center gap-2"><HeartPulse className="text-pink-400"/> ข้อมูลสุขภาพจิต (ST-5)</h3>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+            <h3 className="font-black text-lg text-slate-800 flex items-center gap-2">
+              <HeartPulse className="text-pink-400"/> ข้อมูลสุขภาพจิต (ST-5)
+            </h3>
+            <span className="text-xs font-bold text-pink-600 bg-pink-50 px-3 py-1 rounded-full border border-pink-100 self-start sm:self-auto">
+              ประเมินทั้งหมด {st5History.length} ครั้ง
+            </span>
+          </div>
+
+          {/* แถบตัวกรองจำแนกครั้งที่ ST-5 */}
+          {st5History.length > 1 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-2 hide-scrollbar mb-4">
+              <span className="text-xs font-bold text-slate-400 mr-1 flex items-center gap-1 shrink-0"><Filter size={12}/> จำแนกครั้งที่:</span>
+              <button
+                onClick={() => setSt5RoundFilter('all')}
+                className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap transition border ${st5RoundFilter === 'all' ? 'bg-pink-500 text-white border-pink-500 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
+              >
+                ทั้งหมด ({st5History.length})
+              </button>
+              {st5History.map((_, idx) => {
+                const roundNum = st5History.length - idx;
+                const isBaseline = roundNum === 1;
+                const isLatest = idx === 0;
+                return (
+                  <button
+                    key={`st5-rf-${roundNum}`}
+                    onClick={() => setSt5RoundFilter(roundNum.toString())}
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap transition border ${st5RoundFilter === roundNum.toString() ? 'bg-pink-500 text-white border-pink-500 shadow-xs' : 'bg-pink-50 text-pink-700 border-pink-200 hover:bg-pink-100'}`}
+                  >
+                    ครั้งที่ {roundNum} {isLatest && '(ล่าสุด)'} {isBaseline && !isLatest && '(แรกเริ่ม)'}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div className="space-y-4">
-            {st5History.map((item, idx) => {
+            {filteredSt5History.map((item) => {
+              const actualRoundNum = st5History.length - st5History.indexOf(item);
               const status = calculateST5(item.score);
               return (
-                <div key={`${item.id}-${idx}`} className="p-5 md:p-6 border border-slate-100 rounded-[2rem] bg-slate-50/50 space-y-4">
+                <div key={`${item.id}-${actualRoundNum}`} className="p-5 md:p-6 border border-slate-100 rounded-[2rem] bg-slate-50/50 space-y-4">
                   <div className="flex flex-wrap justify-between items-center gap-3">
                     <span className="text-sm font-medium text-slate-500 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-sm">
-                      <span className="font-bold text-sky-500 mr-2">ครั้งที่ {st5History.length - idx}</span>
+                      <span className="font-bold text-sky-500 mr-2">ครั้งที่ {actualRoundNum}</span>
                       {new Date(item.timestamp).toLocaleDateString('th-TH')}
                     </span>
                     <div className="flex items-center gap-2">
@@ -1756,22 +2819,57 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
                 </div>
               );
             })}
-            {st5History.length === 0 && <p className="text-sm text-slate-400 text-center py-10">ยังไม่มีข้อมูลการทำแบบประเมิน</p>}
+            {filteredSt5History.length === 0 && <p className="text-sm text-slate-400 text-center py-10">ไม่พบรายการประเมินตามตัวกรอง</p>}
           </div>
         </div>
 
         <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-          <h3 className="font-black text-lg mb-6 text-slate-800 flex items-center gap-2"><Star className="text-amber-400"/> บันทึกพฤติกรรม</h3>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+            <h3 className="font-black text-lg text-slate-800 flex items-center gap-2">
+              <Star className="text-amber-400"/> บันทึกพฤติกรรม
+            </h3>
+            <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3 py-1 rounded-full border border-amber-200 self-start sm:self-auto">
+              บันทึกทั้งหมด {behaviorHistory.length} ครั้ง
+            </span>
+          </div>
+
+          {/* แถบตัวกรองจำแนกครั้งที่ พฤติกรรม */}
+          {behaviorHistory.length > 1 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-2 hide-scrollbar mb-4">
+              <span className="text-xs font-bold text-slate-400 mr-1 flex items-center gap-1 shrink-0"><Filter size={12}/> จำแนกครั้งที่:</span>
+              <button
+                onClick={() => setBehaviorRoundFilter('all')}
+                className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap transition border ${behaviorRoundFilter === 'all' ? 'bg-amber-500 text-white border-amber-500 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
+              >
+                ทั้งหมด ({behaviorHistory.length})
+              </button>
+              {behaviorHistory.map((_, idx) => {
+                const roundNum = behaviorHistory.length - idx;
+                const isLatest = idx === 0;
+                return (
+                  <button
+                    key={`beh-rf-${roundNum}`}
+                    onClick={() => setBehaviorRoundFilter(roundNum.toString())}
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap transition border ${behaviorRoundFilter === roundNum.toString() ? 'bg-amber-500 text-white border-amber-500 shadow-xs' : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'}`}
+                  >
+                    ครั้งที่ {roundNum} {isLatest && '(ล่าสุด)'}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div className="space-y-4">
-            {behaviorHistory.map((item, idx) => {
+            {filteredBehaviorHistory.map((item) => {
+              const actualRoundNum = behaviorHistory.length - behaviorHistory.indexOf(item);
               const desItems = item.selections?.desirable || [];
               const undItems = item.selections?.undesirable || [];
               return (
-                <div key={`${item.id}-${idx}`} className="p-5 md:p-6 border border-slate-100 rounded-[2rem] bg-white shadow-sm hover:shadow-md transition space-y-4">
+                <div key={`${item.id}-${actualRoundNum}`} className="p-5 md:p-6 border border-slate-100 rounded-[2rem] bg-white shadow-sm hover:shadow-md transition space-y-4">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-3 gap-3">
                      <div className="flex flex-col gap-1">
                        <span className="text-sm font-medium text-slate-500 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200">
-                          <span className="font-bold text-purple-500 mr-2">ครั้งที่ {behaviorHistory.length - idx}</span>
+                          <span className="font-bold text-purple-500 mr-2">ครั้งที่ {actualRoundNum}</span>
                           {new Date(item.timestamp).toLocaleString('th-TH')}
                         </span>
                         {item.st5RoundId && (
@@ -1819,7 +2917,7 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
                 </div>
               );
             })}
-             {behaviorHistory.length === 0 && <p className="text-sm text-slate-400 text-center py-10">ยังไม่มีประวัติบันทึกพฤติกรรม</p>}
+             {filteredBehaviorHistory.length === 0 && <p className="text-sm text-slate-400 text-center py-10">ไม่พบรายการพฤติกรรมตามตัวกรอง</p>}
           </div>
         </div>
       </div>
@@ -1839,6 +2937,288 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
   const [duplicateCheck, setDuplicateCheck] = useState(null);
   const [importSummary, setImportSummary] = useState(null);
   const [restoreStatus, setRestoreStatus] = useState(null);
+
+  // Backup & Restore Filter States
+  const [backupModel, setBackupModel] = useState('all');
+  const [backupDistrict, setBackupDistrict] = useState('all');
+  const [backupArea, setBackupArea] = useState('all');
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [backupSummary, setBackupSummary] = useState(null);
+
+  // Pending restore file data awaiting confirmation with summary
+  const [pendingRestore, setPendingRestore] = useState(null);
+  const [restoreFilterModel, setRestoreFilterModel] = useState('all');
+  const [restoreFilterDistrict, setRestoreFilterDistrict] = useState('all');
+  const [restoreFilterArea, setRestoreFilterArea] = useState('all');
+  const [restoreSummary, setRestoreSummary] = useState(null);
+
+  // Computed available target areas based on selected backup model and district
+  const availableBackupAreas = useMemo(() => {
+    return [...schoolOptions, ...communityOptions].filter(aff => {
+      const meta = getAreaMetadata(aff);
+      if (backupModel !== 'all' && meta.model !== backupModel) return false;
+      if (backupDistrict !== 'all' && meta.district !== backupDistrict) return false;
+      return true;
+    });
+  }, [backupModel, backupDistrict]);
+
+  // Execute Filtered Backup
+  const handleFilteredBackup = async () => {
+    const filterDesc = [
+      backupModel !== 'all' ? `โมเดล: ${backupModel}` : 'ทุกโมเดล',
+      backupDistrict !== 'all' ? `อำเภอ: ${backupDistrict}` : 'ทุกอำเภอ',
+      backupArea !== 'all' ? `พื้นที่: ${backupArea}` : 'ทุกพื้นที่เป้าหมาย'
+    ].join(' | ');
+
+    triggerConfirm(`ยืนยันการสำรองข้อมูลตามเงื่อนไข (${filterDesc}) ใช่หรือไม่?`, async () => {
+      setIsBackingUp(true);
+      try {
+        const usersSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
+        const st5Snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'st5'));
+        const behSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'behaviors'));
+
+        const allUsers = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const allSt5 = st5Snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const allBeh = behSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Map users to lookup by username/id
+        const userAffilMap: Record<string, string> = {};
+        allUsers.forEach(u => {
+          if (u.id) userAffilMap[String(u.id).toLowerCase()] = u.affiliation || '';
+          if (u.username) userAffilMap[String(u.username).toLowerCase()] = u.affiliation || '';
+        });
+
+        // Filter predicate
+        const matchesFilter = (aff: string) => {
+          const meta = getAreaMetadata(aff);
+          if (backupModel !== 'all' && meta.model !== backupModel) return false;
+          if (backupDistrict !== 'all' && meta.district !== backupDistrict) return false;
+          if (backupArea !== 'all' && aff !== backupArea) return false;
+          return true;
+        };
+
+        const filteredUsers = allUsers.filter(u => matchesFilter(u.affiliation || ''));
+        const allowedUserKeys = new Set(filteredUsers.flatMap(u => [
+          String(u.id).toLowerCase(),
+          String(u.username || '').toLowerCase()
+        ]).filter(Boolean));
+
+        const filteredSt5 = allSt5.filter(s => {
+          const uidKey = String(s.uid || s.userId || '').toLowerCase();
+          if (allowedUserKeys.has(uidKey)) return true;
+          const userAff = userAffilMap[uidKey];
+          return userAff ? matchesFilter(userAff) : false;
+        });
+
+        const filteredBeh = allBeh.filter(b => {
+          const targetKey = String(b.targetUid || '').toLowerCase();
+          if (allowedUserKeys.has(targetKey)) return true;
+          const userAff = userAffilMap[targetKey];
+          return userAff ? matchesFilter(userAff) : false;
+        });
+
+        const totalExported = filteredUsers.length + filteredSt5.length + filteredBeh.length;
+        if (totalExported === 0) {
+          triggerAlert('ไม่พบข้อมูลตามเงื่อนไขที่เลือกเพื่อส่งออก', 'error');
+          setIsBackingUp(false);
+          return;
+        }
+
+        const data = {
+          metadata: {
+            model: backupModel,
+            district: backupDistrict,
+            area: backupArea,
+            exportedAt: new Date().toISOString(),
+            totalUsers: filteredUsers.length,
+            totalSt5: filteredSt5.length,
+            totalBehaviors: filteredBeh.length
+          },
+          users: filteredUsers,
+          st5: filteredSt5,
+          behaviors: filteredBeh,
+          timestamp: new Date().toISOString()
+        };
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safeAreaName = backupArea !== 'all' ? `_${backupArea}` : (backupDistrict !== 'all' ? `_${backupDistrict}` : '');
+        a.download = `st5_backup${safeAreaName}_${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        // Show Export Summary Modal
+        setBackupSummary({
+          filterDesc,
+          model: backupModel,
+          district: backupDistrict,
+          area: backupArea,
+          usersCount: filteredUsers.length,
+          st5Count: filteredSt5.length,
+          behaviorsCount: filteredBeh.length,
+          total: totalExported
+        });
+        triggerAlert(`สำรองข้อมูลสำเร็จ รวม ${totalExported} รายการ`, 'success');
+      } catch (err: any) {
+        triggerAlert('เกิดข้อผิดพลาดในการสำรองข้อมูล: ' + err.message, 'error');
+      } finally {
+        setIsBackingUp(false);
+      }
+    });
+  };
+
+  // Inspect uploaded JSON file and open Filter/Review modal
+  const handleRestoreFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = JSON.parse(evt.target?.result as string);
+        if (!data.users || !data.st5 || !data.behaviors) {
+          triggerAlert('ไฟล์สำรองข้อมูลไม่ถูกต้อง หรือไม่สมบูรณ์ (ต้องมีข้อมูล users, st5, behaviors)', 'error');
+          return;
+        }
+
+        // Set pending file for filtered import modal
+        setPendingRestore(data);
+        setRestoreFilterModel(data.metadata?.model || 'all');
+        setRestoreFilterDistrict(data.metadata?.district || 'all');
+        setRestoreFilterArea(data.metadata?.area || 'all');
+      } catch (err) {
+        triggerAlert('ไม่สามารถอ่านไฟล์ JSON ได้ หรือรูปแบบไฟล์ไม่ถูกต้อง', 'error');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = ''; // Reset input
+  };
+
+  // Execute Filtered Restore
+  const executeRestore = async () => {
+    if (!pendingRestore) return;
+
+    // Filter items according to selected restore filters
+    const matchesRestoreFilter = (aff: string) => {
+      const meta = getAreaMetadata(aff);
+      if (restoreFilterModel !== 'all' && meta.model !== restoreFilterModel) return false;
+      if (restoreFilterDistrict !== 'all' && meta.district !== restoreFilterDistrict) return false;
+      if (restoreFilterArea !== 'all' && aff !== restoreFilterArea) return false;
+      return true;
+    };
+
+    const userAffilInFile: Record<string, string> = {};
+    pendingRestore.users.forEach((u: any) => {
+      if (u.id) userAffilInFile[String(u.id).toLowerCase()] = u.affiliation || '';
+      if (u.username) userAffilInFile[String(u.username).toLowerCase()] = u.affiliation || '';
+    });
+
+    const targetUsers = pendingRestore.users.filter((u: any) => matchesRestoreFilter(u.affiliation || ''));
+    const targetUserKeys = new Set(targetUsers.flatMap((u: any) => [
+      String(u.id).toLowerCase(),
+      String(u.username || '').toLowerCase()
+    ]).filter(Boolean));
+
+    const targetSt5 = pendingRestore.st5.filter((s: any) => {
+      const uidKey = String(s.uid || s.userId || '').toLowerCase();
+      if (targetUserKeys.has(uidKey)) return true;
+      const aff = userAffilInFile[uidKey];
+      return aff ? matchesRestoreFilter(aff) : (restoreFilterArea === 'all' && restoreFilterDistrict === 'all' && restoreFilterModel === 'all');
+    });
+
+    const targetBeh = pendingRestore.behaviors.filter((b: any) => {
+      const targetKey = String(b.targetUid || '').toLowerCase();
+      if (targetUserKeys.has(targetKey)) return true;
+      const aff = userAffilInFile[targetKey];
+      return aff ? matchesRestoreFilter(aff) : (restoreFilterArea === 'all' && restoreFilterDistrict === 'all' && restoreFilterModel === 'all');
+    });
+
+    const totalToRestore = targetUsers.length + targetSt5.length + targetBeh.length;
+    if (totalToRestore === 0) {
+      triggerAlert('ไม่พบรายการข้อมูลในไฟล์ที่ตรงกับเงื่อนไขการนำเข้าที่เลือก', 'error');
+      return;
+    }
+
+    const filterDesc = [
+      restoreFilterModel !== 'all' ? `โมเดล: ${restoreFilterModel}` : 'ทุกโมเดล',
+      restoreFilterDistrict !== 'all' ? `อำเภอ: ${restoreFilterDistrict}` : 'ทุกอำเภอ',
+      restoreFilterArea !== 'all' ? `พื้นที่: ${restoreFilterArea}` : 'ทุกพื้นที่เป้าหมาย'
+    ].join(' | ');
+
+    setPendingRestore(null); // Close filter dialog
+
+    triggerConfirm(
+      `คำเตือน: ยืนยันการนำเข้า/กู้คืนข้อมูล (${filterDesc})\n` +
+      `ผู้ใช้: ${targetUsers.length} รายการ\n` +
+      `ST-5: ${targetSt5.length} รายการ\n` +
+      `พฤติกรรม: ${targetBeh.length} รายการ\n` +
+      `รวมทั้งสิ้น ${totalToRestore} รายการ เพิ่ม/ทับลงในฐานข้อมูล Firestore หรือไม่?`,
+      async () => {
+        try {
+          setRestoreStatus({
+            isRestoring: true,
+            current: 0,
+            total: totalToRestore,
+            message: 'เริ่มต้นการกู้คืนข้อมูล...',
+            finished: false,
+            error: null
+          });
+          let currentCount = 0;
+
+          // 1. Users
+          for (const u of targetUsers) {
+            const { id, ...rest } = u;
+            const docId = id || u.username;
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', String(docId).toLowerCase()), rest);
+            currentCount++;
+            setRestoreStatus(prev => ({ ...prev, current: currentCount, message: `กำลังกู้คืนข้อมูลผู้ใช้ (${currentCount}/${totalToRestore})` }));
+          }
+
+          // 2. ST5
+          for (const s of targetSt5) {
+            const { id, ...rest } = s;
+            if (id) {
+              await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', id), rest);
+            } else {
+              await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'st5'), rest);
+            }
+            currentCount++;
+            setRestoreStatus(prev => ({ ...prev, current: currentCount, message: `กำลังกู้คืนข้อมูล ST-5 (${currentCount}/${totalToRestore})` }));
+          }
+
+          // 3. Behaviors
+          for (const b of targetBeh) {
+            const { id, ...rest } = b;
+            if (id) {
+              await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', id), rest);
+            } else {
+              await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'behaviors'), rest);
+            }
+            currentCount++;
+            setRestoreStatus(prev => ({ ...prev, current: currentCount, message: `กำลังกู้คืนข้อมูลพฤติกรรม (${currentCount}/${totalToRestore})` }));
+          }
+
+          setRestoreStatus(null);
+          setRestoreSummary({
+            filterDesc,
+            usersCount: targetUsers.length,
+            st5Count: targetSt5.length,
+            behaviorsCount: targetBeh.length,
+            total: totalToRestore
+          });
+          triggerAlert(`นำเข้า/กู้คืนข้อมูลสำเร็จเรียบร้อย รวม ${totalToRestore} รายการ!`, 'success');
+        } catch (err: any) {
+          setRestoreStatus(null);
+          triggerAlert('เกิดข้อผิดพลาดในการกู้คืนข้อมูล: ' + err.message, 'error');
+        }
+      },
+      'danger'
+    );
+  };
 
   const handlePreview = () => {
     if (!inputText.trim()) {
@@ -1991,111 +3371,85 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
             <p className="text-slate-500 font-medium">นำเข้าข้อมูลจากตาราง PDF หรือ Excel และสำรอง/กู้คืนข้อมูลทั้งระบบ (JSON)</p>
             </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
             <button 
-                onClick={async () => {
-                   triggerConfirm('ยืนยันการสำรองข้อมูลทั้งหมดในระบบ (Users, ST-5, Behaviors) ออกเป็นไฟล์ JSON?', async () => {
-                       try {
-                           const usersSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
-                           const st5Snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'st5'));
-                           const behSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'behaviors'));
-                           
-                           const data = {
-                               users: usersSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-                               st5: st5Snap.docs.map(d => ({ id: d.id, ...d.data() })),
-                               behaviors: behSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-                               timestamp: new Date().toISOString()
-                           };
-                           
-                           const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                           const url = URL.createObjectURL(blob);
-                           const a = document.createElement('a');
-                           a.href = url;
-                           a.download = `st5_backup_${new Date().toISOString().split('T')[0]}.json`;
-                           document.body.appendChild(a);
-                           a.click();
-                           document.body.removeChild(a);
-                           URL.revokeObjectURL(url);
-                           triggerAlert('ดาวน์โหลดไฟล์สำรองข้อมูลเรียบร้อยแล้ว', 'success');
-                       } catch(err) {
-                           triggerAlert('เกิดข้อผิดพลาดในการสำรองข้อมูล: ' + err.message, 'error');
-                       }
-                   });
-                }}
-                className="px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-200 hover:bg-indigo-100 font-bold rounded-xl flex items-center gap-2 transition"
+                onClick={handleFilteredBackup}
+                disabled={isBackingUp}
+                className="px-4 py-2.5 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white font-bold rounded-xl flex items-center gap-2 shadow-sm transition disabled:opacity-50"
             >
-                <Download size={18} /> สำรองข้อมูล (Backup)
+                {isBackingUp ? <RefreshCw size={18} className="animate-spin" /> : <Download size={18} />}
+                <span>ส่งออกสำรองข้อมูล (Backup)</span>
             </button>
-            <label className="px-4 py-2 bg-slate-800 text-white border border-slate-700 hover:bg-slate-700 font-bold rounded-xl flex items-center gap-2 transition cursor-pointer">
-                <Database size={18} /> กู้คืนข้อมูล (Restore)
+            <label className="px-4 py-2.5 bg-slate-800 text-white border border-slate-700 hover:bg-slate-700 font-bold rounded-xl flex items-center gap-2 transition cursor-pointer shadow-sm">
+                <Database size={18} /> 
+                <span>นำเข้า/กู้คืนข้อมูล (Restore)</span>
                 <input 
                     type="file" 
                     accept=".json" 
                     className="hidden" 
-                    onChange={(e) => {
-                        const file = e.target.files[0];
-                        if(!file) return;
-                        
-                        const reader = new FileReader();
-                        reader.onload = (evt) => {
-                            try {
-                                const data = JSON.parse(evt.target.result as string);
-                                if(!data.users || !data.st5 || !data.behaviors) {
-                                    triggerAlert('ไฟล์สำรองข้อมูลไม่ถูกต้อง หรือไม่สมบูรณ์', 'error');
-                                    return;
-                                }
-                                
-                                triggerConfirm(`คำเตือน: การกู้คืนข้อมูลจะนำข้อมูลจากไฟล์ (Users: ${data.users.length}, ST-5: ${data.st5.length}, Behaviors: ${data.behaviors.length}) เพิ่ม/ทับลงในระบบ ยืนยันหรือไม่?`, async () => {
-                                    try {
-                                        const totalItems = data.users.length + data.st5.length + data.behaviors.length;
-                                        setRestoreStatus({
-                                            isRestoring: true,
-                                            current: 0,
-                                            total: totalItems,
-                                            message: 'เริ่มต้นการกู้คืนข้อมูล...',
-                                            finished: false,
-                                            error: null
-                                        });
-                                        let currentCount = 0;
-
-                                        // 1. Users
-                                        for(const u of data.users) {
-                                            const { id, ...rest } = u;
-                                            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', id), rest);
-                                            currentCount++;
-                                            setRestoreStatus(prev => ({...prev, current: currentCount, message: `กำลังกู้คืนข้อมูลผู้ใช้ (${currentCount}/${totalItems})`}));
-                                        }
-                                        // 2. ST5
-                                        for(const s of data.st5) {
-                                            const { id, ...rest } = s;
-                                            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', id), rest);
-                                            currentCount++;
-                                            setRestoreStatus(prev => ({...prev, current: currentCount, message: `กำลังกู้คืนข้อมูล ST-5 (${currentCount}/${totalItems})`}));
-                                        }
-                                        // 3. Behaviors
-                                        for(const b of data.behaviors) {
-                                            const { id, ...rest } = b;
-                                            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', id), rest);
-                                            currentCount++;
-                                            setRestoreStatus(prev => ({...prev, current: currentCount, message: `กำลังกู้คืนข้อมูลพฤติกรรม (${currentCount}/${totalItems})`}));
-                                        }
-                                        
-                                        setRestoreStatus(null);
-                                        triggerAlert('กู้คืนข้อมูลเรียบร้อยแล้ว!', 'success');
-                                    } catch(err) {
-                                        setRestoreStatus(null);
-                                        triggerAlert('เกิดข้อผิดพลาดในการกู้คืนข้อมูล: ' + err.message, 'error');
-                                    }
-                                }, 'danger');
-                            } catch(err) {
-                                triggerAlert('ไม่สามารถอ่านไฟล์ JSON ได้', 'error');
-                            }
-                        };
-                        reader.readAsText(file);
-                        e.target.value = ''; // reset
-                    }}
+                    onChange={handleRestoreFileSelected}
                 />
             </label>
+        </div>
+      </div>
+
+      {/* Filtered Backup Criteria Selection Bar */}
+      <div className="mb-8 p-5 bg-gradient-to-r from-indigo-50/70 via-slate-50 to-blue-50/50 rounded-2xl border border-indigo-100/80 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 text-indigo-900 font-bold text-sm">
+                <Filter size={16} className="text-indigo-600" />
+                <span>ตัวเลือกเงื่อนไขการส่งออกสำรองข้อมูล (Backup Filters):</span>
+            </div>
+            <span className="text-xs text-slate-500">
+                สามารถเลือกเจาะจงเฉพาะโมเดล อำเภอ หรือพื้นที่เป้าหมายที่ต้องการสำรองข้อมูลได้
+            </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">โมเดล (Model)</label>
+                <select 
+                    value={backupModel}
+                    onChange={(e) => {
+                        setBackupModel(e.target.value);
+                        setBackupArea('all');
+                    }}
+                    className="w-full bg-white border border-slate-200 text-slate-700 text-sm rounded-xl px-3 py-2 outline-none focus:border-indigo-400 font-medium transition"
+                >
+                    <option value="all">ทุกโมเดล (ทั้งหมด)</option>
+                    {modelOptions.map(m => (
+                        <option key={m} value={m}>{m}</option>
+                    ))}
+                </select>
+            </div>
+            <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">อำเภอ (District)</label>
+                <select 
+                    value={backupDistrict}
+                    onChange={(e) => {
+                        setBackupDistrict(e.target.value);
+                        setBackupArea('all');
+                    }}
+                    className="w-full bg-white border border-slate-200 text-slate-700 text-sm rounded-xl px-3 py-2 outline-none focus:border-indigo-400 font-medium transition"
+                >
+                    <option value="all">ทุกอำเภอ (ทั้งหมด)</option>
+                    {districtOptions.map(d => (
+                        <option key={d} value={d}>{d}</option>
+                    ))}
+                </select>
+            </div>
+            <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">พื้นที่เป้าหมาย / สังกัด (Target Area)</label>
+                <select 
+                    value={backupArea}
+                    onChange={(e) => setBackupArea(e.target.value)}
+                    className="w-full bg-white border border-slate-200 text-slate-700 text-sm rounded-xl px-3 py-2 outline-none focus:border-indigo-400 font-medium transition"
+                >
+                    <option value="all">ทุกพื้นที่เป้าหมาย (ทั้งหมด)</option>
+                    {availableBackupAreas.map(a => (
+                        <option key={a} value={a}>{a}</option>
+                    ))}
+                </select>
+            </div>
         </div>
       </div>
       
@@ -2292,6 +3646,201 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
            </div>
         </div>
     )}
+
+    {/* Filtered Restore Selection Modal (After JSON is uploaded) */}
+    {pendingRestore && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
+           <div className="bg-white p-6 md:p-8 rounded-[2.5rem] max-w-lg w-full shadow-2xl border border-slate-100 space-y-5 animate-in zoom-in-95">
+              <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                  <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner">
+                      <Database size={24} />
+                  </div>
+                  <div>
+                      <h3 className="text-lg font-black text-slate-800">เลือกเงื่อนไขการนำเข้าข้อมูล (Restore Filters)</h3>
+                      <p className="text-xs text-slate-500">เลือกกรองเฉพาะส่วนที่ต้องการนำเข้า หรือเลือกนำเข้าทั้งหมด</p>
+                  </div>
+              </div>
+
+              {/* Data in File Summary */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/60 text-xs space-y-2">
+                  <div className="font-bold text-slate-700 flex items-center justify-between">
+                      <span>ข้อมูลที่พบในไฟล์ JSON:</span>
+                      <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">
+                          รวม {(pendingRestore.users?.length || 0) + (pendingRestore.st5?.length || 0) + (pendingRestore.behaviors?.length || 0)} รายการ
+                      </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 pt-1 text-center font-medium">
+                      <div className="bg-white p-2 rounded-xl border border-slate-100">
+                          <span className="block text-slate-400 text-[10px]">ผู้ใช้งาน (Users)</span>
+                          <span className="font-bold text-slate-700 text-sm">{pendingRestore.users?.length || 0}</span>
+                      </div>
+                      <div className="bg-white p-2 rounded-xl border border-slate-100">
+                          <span className="block text-slate-400 text-[10px]">คัดกรอง ST-5</span>
+                          <span className="font-bold text-teal-600 text-sm">{pendingRestore.st5?.length || 0}</span>
+                      </div>
+                      <div className="bg-white p-2 rounded-xl border border-slate-100">
+                          <span className="block text-slate-400 text-[10px]">พฤติกรรม</span>
+                          <span className="font-bold text-indigo-600 text-sm">{pendingRestore.behaviors?.length || 0}</span>
+                      </div>
+                  </div>
+              </div>
+
+              {/* Filter controls */}
+              <div className="space-y-3">
+                  <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">1. โมเดลเป้าหมายที่จะนำเข้า</label>
+                      <select 
+                          value={restoreFilterModel}
+                          onChange={(e) => {
+                              setRestoreFilterModel(e.target.value);
+                              setRestoreFilterArea('all');
+                          }}
+                          className="w-full bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-400 font-medium transition"
+                      >
+                          <option value="all">ทุกโมเดล (นำเข้าทั้งหมดที่มีในไฟล์)</option>
+                          {modelOptions.map(m => (
+                              <option key={m} value={m}>{m}</option>
+                          ))}
+                      </select>
+                  </div>
+
+                  <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">2. อำเภอเป้าหมายที่จะนำเข้า</label>
+                      <select 
+                          value={restoreFilterDistrict}
+                          onChange={(e) => {
+                              setRestoreFilterDistrict(e.target.value);
+                              setRestoreFilterArea('all');
+                          }}
+                          className="w-full bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-400 font-medium transition"
+                      >
+                          <option value="all">ทุกอำเภอ (นำเข้าทั้งหมดที่มีในไฟล์)</option>
+                          {districtOptions.map(d => (
+                              <option key={d} value={d}>{d}</option>
+                          ))}
+                      </select>
+                  </div>
+
+                  <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">3. พื้นที่เป้าหมาย / สังกัด ที่จะนำเข้า</label>
+                      <select 
+                          value={restoreFilterArea}
+                          onChange={(e) => setRestoreFilterArea(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-400 font-medium transition"
+                      >
+                          <option value="all">ทุกพื้นที่เป้าหมาย (นำเข้าทั้งหมดที่มีในไฟล์)</option>
+                          {[...schoolOptions, ...communityOptions].filter(aff => {
+                              const meta = getAreaMetadata(aff);
+                              if (restoreFilterModel !== 'all' && meta.model !== restoreFilterModel) return false;
+                              if (restoreFilterDistrict !== 'all' && meta.district !== restoreFilterDistrict) return false;
+                              return true;
+                          }).map(a => (
+                              <option key={a} value={a}>{a}</option>
+                          ))}
+                      </select>
+                  </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-3 pt-2">
+                  <button 
+                      onClick={() => setPendingRestore(null)}
+                      className="w-1/2 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition text-sm"
+                  >
+                      ยกเลิก
+                  </button>
+                  <button 
+                      onClick={executeRestore}
+                      className="w-1/2 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition text-sm flex items-center justify-center gap-2"
+                  >
+                      <CheckCircle2 size={16} /> ยืนยันการนำเข้า
+                  </button>
+              </div>
+           </div>
+        </div>
+    )}
+
+    {/* Export Backup Summary Modal */}
+    {backupSummary && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
+           <div className="bg-white p-6 md:p-8 rounded-[2rem] max-w-md w-full shadow-2xl border border-slate-100 text-center space-y-5 animate-in zoom-in-95">
+              <div className="mx-auto w-16 h-16 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center shadow-inner border-2 border-white mb-2">
+                 <CheckCircle2 size={32} />
+              </div>
+              <div>
+                  <h3 className="text-xl font-black text-slate-800">สรุปการสำรองข้อมูล (Export Summary)</h3>
+                  <p className="text-xs text-slate-500 mt-1">{backupSummary.filterDesc}</p>
+              </div>
+
+              <div className="bg-slate-50 rounded-2xl p-4 space-y-2.5 text-left border border-slate-100 text-sm">
+                  <div className="flex justify-between items-center text-slate-600">
+                      <span>ผู้ใช้งาน (Users)</span>
+                      <span className="font-bold text-slate-800">{backupSummary.usersCount} คน</span>
+                  </div>
+                  <div className="flex justify-between items-center text-teal-600 border-t border-slate-200/80 pt-2">
+                      <span>ประเมิน ST-5</span>
+                      <span className="font-bold">{backupSummary.st5Count} ครั้ง</span>
+                  </div>
+                  <div className="flex justify-between items-center text-indigo-600 border-t border-slate-200/80 pt-2">
+                      <span>แบบประเมินพฤติกรรม</span>
+                      <span className="font-bold">{backupSummary.behaviorsCount} ครั้ง</span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-800 font-black border-t-2 border-slate-200 pt-2 text-base">
+                      <span>รวมทั้งหมดที่ส่งออก</span>
+                      <span className="text-indigo-600">{backupSummary.total} รายการ</span>
+                  </div>
+              </div>
+
+              <button 
+                  onClick={() => setBackupSummary(null)}
+                  className="w-full py-3.5 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-700 shadow-md transition"
+              >
+                  เรียบร้อย
+              </button>
+           </div>
+        </div>
+    )}
+
+    {/* Restore Import Summary Modal */}
+    {restoreSummary && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
+           <div className="bg-white p-6 md:p-8 rounded-[2rem] max-w-md w-full shadow-2xl border border-slate-100 text-center space-y-5 animate-in zoom-in-95">
+              <div className="mx-auto w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center shadow-inner border-2 border-white mb-2">
+                 <CheckCircle2 size={32} />
+              </div>
+              <div>
+                  <h3 className="text-xl font-black text-slate-800">สรุปผลการนำเข้าข้อมูล (Import Summary)</h3>
+                  <p className="text-xs text-slate-500 mt-1">{restoreSummary.filterDesc}</p>
+              </div>
+
+              <div className="bg-slate-50 rounded-2xl p-4 space-y-2.5 text-left border border-slate-100 text-sm">
+                  <div className="flex justify-between items-center text-slate-600">
+                      <span>ผู้ใช้งาน (Users) ที่นำเข้า</span>
+                      <span className="font-bold text-slate-800">{restoreSummary.usersCount} คน</span>
+                  </div>
+                  <div className="flex justify-between items-center text-teal-600 border-t border-slate-200/80 pt-2">
+                      <span>ประเมิน ST-5 ที่นำเข้า</span>
+                      <span className="font-bold">{restoreSummary.st5Count} ครั้ง</span>
+                  </div>
+                  <div className="flex justify-between items-center text-indigo-600 border-t border-slate-200/80 pt-2">
+                      <span>แบบประเมินพฤติกรรมที่นำเข้า</span>
+                      <span className="font-bold">{restoreSummary.behaviorsCount} ครั้ง</span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-800 font-black border-t-2 border-slate-200 pt-2 text-base">
+                      <span>รวมนำเข้าสำเร็จทั้งหมด</span>
+                      <span className="text-teal-600">{restoreSummary.total} รายการ</span>
+                  </div>
+              </div>
+
+              <button 
+                  onClick={() => setRestoreSummary(null)}
+                  className="w-full py-3.5 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-700 shadow-md transition"
+              >
+                  ปิดหน้าต่าง
+              </button>
+           </div>
+        </div>
+    )}
     </>
   );
 }
@@ -2301,31 +3850,21 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
 // ==========================================
 function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, triggerConfirm, triggerDownloadConsentPdf }) {
   const [editingUser, setEditingUser] = useState(null);
+  const [selectedAffiliation, setSelectedAffiliation] = useState('all');
   
   const displayUsers = profile.id === 'rung' ? users : users.filter(u => Array.isArray(profile.affiliation) ? profile.affiliation.includes(u.affiliation) : u.affiliation === profile.affiliation);
   const pendingAdmins = displayUsers.filter(u => u.role === 'admin' && u.status === 'pending');
 
-  const comparisonData = useMemo(() => {
-    const students = displayUsers.filter(u => ['student', 'community', 'teacher'].includes(u.accountType));
-    return students.map(student => {
-        const studentSt5 = st5Data.filter(d => d.uid === student.id || d.userId === student.id).sort((a, b) => a.timestamp - b.timestamp);
-        const positiveBehaviors = behaviorData.filter(d => d.targetUid === student.id && d.selections?.desirable?.length > 0);
-        
-        if (studentSt5.length >= 2 && positiveBehaviors.length >= 1) {
-            const preTest = studentSt5[0];
-            const postTest = studentSt5[studentSt5.length - 1];
-            
-            return {
-                student,
-                preScore: parseInt(preTest.score) || 0,
-                postScore: parseInt(postTest.score) || 0,
-                diff: (parseInt(postTest.score) || 0) - (parseInt(preTest.score) || 0),
-                interventions: positiveBehaviors.length
-            };
-        }
-        return null;
-    }).filter(Boolean);
-  }, [displayUsers, st5Data, behaviorData]);
+  const availableAffiliations = useMemo(() => {
+    if (profile.id === 'rung') {
+      return Array.from(new Set(users.map(u => u.affiliation).filter(Boolean)));
+    }
+    return Array.isArray(profile.affiliation) ? profile.affiliation : [profile.affiliation].filter(Boolean);
+  }, [profile, users]);
+
+  const studentUsers = useMemo(() => {
+    return displayUsers.filter(u => ['student', 'community', 'teacher'].includes(u.accountType));
+  }, [displayUsers]);
 
   const approveAdmin = async (uid) => {
     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid), { status: 'approved' });
@@ -2391,64 +3930,18 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
         )}
       </div>
 
-      <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 bg-teal-50 rounded-2xl flex items-center justify-center border border-teal-100">
-            <TrendingUp size={24} className="text-teal-500" strokeWidth={2.5} />
-          </div>
-          <div>
-            <h3 className="font-black text-xl text-slate-800">ผลสัมฤทธิ์การปรับเปลี่ยนพฤติกรรม</h3>
-            <p className="text-slate-500 font-medium text-xs">เปรียบเทียบผลประเมิน ST-5 ก่อนและหลังทำกิจกรรมเชิงบวก</p>
-          </div>
-        </div>
-
-        {comparisonData.length > 0 ? (
-            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden w-full max-h-[50vh] flex flex-col">
-                <div className="overflow-y-auto hide-scrollbar">
-                    <table className="w-full text-left">
-                        <thead className="bg-slate-50 border-b border-slate-100 sticky top-0 z-10">
-                            <tr>
-                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider">ชื่อ-สกุล / สังกัด</th>
-                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">กิจกรรมเชิงบวก</th>
-                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">ก่อนทำกิจกรรม<br/><span className="text-[9px] font-medium text-slate-400">(ST-5 แรก)</span></th>
-                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">หลังทำกิจกรรม<br/><span className="text-[9px] font-medium text-slate-400">(ST-5 ล่าสุด)</span></th>
-                                <th className="p-4 font-bold text-slate-500 text-xs tracking-wider text-center">ผลลัพธ์</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                            {comparisonData.map((row, idx) => (
-                                <tr key={`sup-comp-${row.student.id}-${idx}`} className="hover:bg-slate-50/50 transition">
-                                    <td className="p-4 text-sm font-bold text-slate-700">
-                                        {row.student.name}
-                                        <div className="text-[10px] text-slate-400 mt-1">{row.student.affiliation}</div>
-                                    </td>
-                                    <td className="p-4 text-center">
-                                        <span className="bg-teal-50 text-teal-600 px-2.5 py-1 rounded-lg text-xs font-bold border border-teal-100">{row.interventions} ครั้ง</span>
-                                    </td>
-                                    <td className="p-4 text-center font-black text-slate-600">{row.preScore}</td>
-                                    <td className="p-4 text-center font-black text-slate-800">{row.postScore}</td>
-                                    <td className="p-4 text-center">
-                                        {row.diff < 0 ? (
-                                            <span className="text-teal-500 font-bold flex items-center justify-center gap-1 text-sm bg-teal-50 px-2 py-1 rounded-lg border border-teal-100 w-max mx-auto"><TrendingDown size={14}/> ลดลง {Math.abs(row.diff)}</span>
-                                        ) : row.diff > 0 ? (
-                                            <span className="text-rose-500 font-bold flex items-center justify-center gap-1 text-sm bg-rose-50 px-2 py-1 rounded-lg border border-rose-100 w-max mx-auto"><TrendingUp size={14}/> เพิ่ม {row.diff}</span>
-                                        ) : (
-                                            <span className="text-slate-400 font-bold flex items-center justify-center gap-1 text-sm bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 w-max mx-auto"><Minus size={14}/> คงที่</span>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        ) : (
-            <div className="bg-slate-50 p-6 rounded-3xl border border-dashed border-slate-200 text-center">
-                <Activity className="mx-auto text-slate-300 mb-3" size={32} />
-                <p className="text-slate-500 font-medium text-sm">ยังไม่มีข้อมูลเปรียบเทียบผลสัมฤทธิ์ในสังกัดนี้</p>
-            </div>
-        )}
-      </div>
+      {/* 📊 ระบบติดตาม จำแนก และเปรียบเทียบผลการประเมิน (Follow-up Tracker & Impact View) */}
+      <FollowUpTrackerView 
+        students={studentUsers}
+        st5Data={st5Data}
+        behaviorData={behaviorData}
+        showAffiliation={true}
+        availableAffiliations={availableAffiliations}
+        selectedAffiliation={selectedAffiliation}
+        onAffiliationChange={setSelectedAffiliation}
+        title="ภาพรวมผลสัมฤทธิ์และการจำแนกการติดตามประเมินผล"
+        subtitle="ระบบติดตามและเปรียบเทียบผลการคัดกรองสุขภาพจิต (ST-5) จำแนกตามรายการติดตามครั้งที่ สำหรับผู้ดูแลระบบสูงสุด"
+      />
 
       <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
         <h3 className="font-black text-xl mb-6 text-slate-800">จัดการผู้ใช้งานทั้งหมดในระบบ</h3>
@@ -3701,15 +5194,31 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
 function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
   
   const [selectedAffiliation, setSelectedAffiliation] = useState(profile.role === 'superadmin' ? 'all' : profile.affiliation);
+  const [selectedModel, setSelectedModel] = useState('all');
+  const [selectedDistrict, setSelectedDistrict] = useState('all');
   const [expandedRows, setExpandedRows] = useState({});
   
   const baseStudents = users.filter(u => (['student', 'community'].includes(u.accountType) || u.role === 'user') && (profile.role === 'superadmin' || u.affiliation === profile.affiliation));
   
-  const affiliations = Array.from(new Set(baseStudents.map(u => u.affiliation).filter(Boolean)));
+  const allAffiliations = Array.from(new Set(baseStudents.map(u => u.affiliation).filter(Boolean))) as string[];
+  
+  // Filter affiliations based on model, district, and specific affiliation selection
+  const filteredAffiliations = useMemo(() => {
+    return allAffiliations.filter((aff: string) => {
+      const meta = getAreaMetadata(aff);
+      if (selectedModel !== 'all' && meta.model !== selectedModel) return false;
+      if (selectedDistrict !== 'all' && meta.district !== selectedDistrict) return false;
+      if (selectedAffiliation !== 'all' && aff !== selectedAffiliation) return false;
+      return true;
+    });
+  }, [allAffiliations, selectedModel, selectedDistrict, selectedAffiliation]);
   
   const getStats = (affil) => {
     let studentsInAffil = baseStudents;
-    if (affil !== 'all') {
+    if (affil === 'all') {
+      // If 'all', calculate across filtered affiliations if filters are active
+      studentsInAffil = baseStudents.filter(u => filteredAffiliations.includes(u.affiliation));
+    } else {
       studentsInAffil = studentsInAffil.filter(u => u.affiliation === affil);
     }
     
@@ -3773,7 +5282,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
     const overallUniqueUsers = new Set([...Object.keys(st5UserVisits), ...Object.keys(behaviorUserVisits)]);
     const overallUniqueScreenedCount = overallUniqueUsers.size;
 
-    const target = affil === 'all' ? 50 * (affiliations.length || 1) : 50;
+    const target = affil === 'all' ? 50 * (filteredAffiliations.length || 1) : 50;
     const progressPercent = target > 0 ? ((overallUniqueScreenedCount / target) * 100).toFixed(1) : '0';
     
     return {
@@ -3920,7 +5429,7 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                     className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl px-4 py-2 font-medium min-w-[200px] outline-none focus:border-blue-300 transition-colors"
                  >
                     <option value="all">ทุกพื้นที่เป้าหมาย / สังกัด</option>
-                    {affiliations.map(aff => (
+                    {allAffiliations.map(aff => (
                         <option key={aff} value={aff}>{aff}</option>
                     ))}
                  </select>
@@ -3929,12 +5438,38 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                     {profile.affiliation}
                  </div>
              )}
-             <div className="bg-slate-50 border border-slate-200 text-slate-400 text-sm rounded-xl px-4 py-2 font-medium min-w-[150px] cursor-not-allowed flex items-center justify-between">
-                ทุกโมเดล <ChevronDown size={14}/>
-             </div>
-             <div className="bg-slate-50 border border-slate-200 text-slate-400 text-sm rounded-xl px-4 py-2 font-medium min-w-[150px] cursor-not-allowed flex items-center justify-between">
-                ทุกอำเภอ <ChevronDown size={14}/>
-             </div>
+             <select 
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl px-4 py-2 font-medium min-w-[150px] outline-none focus:border-blue-300 transition-colors cursor-pointer"
+             >
+                <option value="all">ทุกโมเดล (ทั้งหมด)</option>
+                {modelOptions.map(m => (
+                    <option key={m} value={m}>{m}</option>
+                ))}
+             </select>
+             <select 
+                value={selectedDistrict}
+                onChange={(e) => setSelectedDistrict(e.target.value)}
+                className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl px-4 py-2 font-medium min-w-[150px] outline-none focus:border-blue-300 transition-colors cursor-pointer"
+             >
+                <option value="all">ทุกอำเภอ (ทั้งหมด)</option>
+                {districtOptions.map(d => (
+                    <option key={d} value={d}>{d}</option>
+                ))}
+             </select>
+             {(selectedAffiliation !== 'all' || selectedModel !== 'all' || selectedDistrict !== 'all') && (
+                <button
+                    onClick={() => {
+                        setSelectedAffiliation(profile.role === 'superadmin' ? 'all' : profile.affiliation);
+                        setSelectedModel('all');
+                        setSelectedDistrict('all');
+                    }}
+                    className="text-xs text-rose-500 hover:text-rose-700 font-bold px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 transition flex items-center gap-1"
+                >
+                    <X size={14} /> ล้างตัวกรอง
+                </button>
+             )}
          </div>
       </div>
 
@@ -3952,9 +5487,10 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                       </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
-                      {(selectedAffiliation === 'all' ? affiliations : [selectedAffiliation]).map(affil => {
+                      {filteredAffiliations.map(affil => {
                           const stats = getStats(affil);
                           const isExpanded = expandedRows[affil];
+                          const meta = getAreaMetadata(affil);
                           
                           return (
                               <React.Fragment key={affil}>
@@ -3971,8 +5507,8 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                                       <td className="p-4 md:p-5 md:table-cell flex justify-between items-center bg-slate-50/50 md:bg-transparent">
                                           <span className="md:hidden text-[10px] font-bold text-slate-500">โมเดล / อำเภอ</span>
                                           <div className="flex flex-col items-start gap-1">
-                                              <span className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">ตำบล</span>
-                                              <span className="text-xs text-slate-600 font-medium pl-1">{affil}</span>
+                                              <span className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">{meta.model}</span>
+                                              <span className="text-xs text-slate-600 font-medium pl-1">อ.{meta.district}</span>
                                           </div>
                                       </td>
                                       <td className="p-4 md:p-5 md:text-center md:table-cell flex justify-between items-center">
@@ -4129,9 +5665,9 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                               </React.Fragment>
                           )
                       })}
-                      {affiliations.length === 0 && (
+                      {filteredAffiliations.length === 0 && (
                           <tr>
-                              <td colSpan={6} className="p-8 text-center text-slate-400 font-medium">ไม่พบข้อมูลสังกัดในระบบ</td>
+                              <td colSpan={6} className="p-8 text-center text-slate-400 font-medium">ไม่พบข้อมูลพื้นที่เป้าหมายตามตัวกรองที่เลือก</td>
                           </tr>
                       )}
                   </tbody>
@@ -4150,12 +5686,12 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                         <th rowSpan={2} className="border border-black p-2 text-center bg-gray-50 align-middle">พื้นที่เป้าหมาย (AREA)</th>
                         <th rowSpan={2} className="border border-black p-2 text-center bg-gray-50 align-middle">โมเดล / อำเภอ</th>
                         <th rowSpan={2} className="border border-black p-2 text-center bg-gray-50 align-middle">เป้าหมาย(คน)</th>
-                        <th colSpan={Math.max(...(selectedAffiliation === 'all' ? affiliations : [selectedAffiliation]).map(a => Math.max(...Object.keys(getStats(a).visitsBreakdown).map(Number), 0)), 1) * 2} className="border border-black p-2 text-center bg-gray-50">
+                        <th colSpan={Math.max(...filteredAffiliations.map(a => Math.max(...Object.keys(getStats(a).visitsBreakdown).map(Number), 0)), 1) * 2} className="border border-black p-2 text-center bg-gray-50">
                             จำนวนที่ได้รับการคัดกรอง(คน)
                         </th>
                     </tr>
                     <tr>
-                        {Array.from({ length: Math.max(...(selectedAffiliation === 'all' ? affiliations : [selectedAffiliation]).map(a => Math.max(...Object.keys(getStats(a).visitsBreakdown).map(Number), 0)), 1) }).map((_, i) => (
+                        {Array.from({ length: Math.max(...filteredAffiliations.map(a => Math.max(...Object.keys(getStats(a).visitsBreakdown).map(Number), 0)), 1) }).map((_, i) => (
                             <React.Fragment key={i}>
                                 <th className="border border-black p-2 text-center bg-gray-50">ครั้งที่ {i + 1}</th>
                                 <th className="border border-black p-2 text-center bg-gray-50">ร้อยละ</th>
@@ -4164,13 +5700,14 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
                     </tr>
                 </thead>
                 <tbody>
-                    {(selectedAffiliation === 'all' ? affiliations : [selectedAffiliation]).map(affil => {
+                    {filteredAffiliations.map(affil => {
                         const stats = getStats(affil);
-                        const maxVisitsOverall = Math.max(...(selectedAffiliation === 'all' ? affiliations : [selectedAffiliation]).map(a => Math.max(...Object.keys(getStats(a).visitsBreakdown).map(Number), 0)), 1);
+                        const meta = getAreaMetadata(affil);
+                        const maxVisitsOverall = Math.max(...filteredAffiliations.map(a => Math.max(...Object.keys(getStats(a).visitsBreakdown).map(Number), 0)), 1);
                         return (
                             <tr key={affil}>
                                 <td className="border border-black p-2">{affil}</td>
-                                <td className="border border-black p-2 text-center">ตำบล</td>
+                                <td className="border border-black p-2 text-center">{meta.model} (อ.{meta.district})</td>
                                 <td className="border border-black p-2 text-center">{stats.target}</td>
                                 {Array.from({ length: maxVisitsOverall }).map((_, i) => {
                                     const visitNum = i + 1;
@@ -4369,7 +5906,7 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
                   const roundNum = st5History.length - idx;
                   const dateStr = new Date(st5.timestamp).toLocaleDateString('th-TH', { dateStyle: 'short' });
                   return (
-                    <option key={`${st5.id}-${index}`} value={st5.id}>
+                    <option key={`${st5.id}-${idx}`} value={st5.id}>
                       ครั้งที่ {roundNum} ({dateStr}) - {st5.level || calculateST5(st5.score).level}
                     </option>
                   );
@@ -4772,7 +6309,7 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
       const pages = Array.from(element.children);
       
       for (let i = 0; i < pages.length; i++) {
-        const pageEl = pages[i];
+        const pageEl = pages[i] as HTMLElement;
         const pageCanvas = await toPng(pageEl, { 
           quality: 1.0, 
           backgroundColor: '#ffffff', 
