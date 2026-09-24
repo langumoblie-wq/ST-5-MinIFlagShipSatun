@@ -1457,7 +1457,11 @@ function FollowUpTrackerView({
     let countR3Plus = 0;
     let countImproved = 0;
 
-    students.forEach(student => {
+    const targetStudents = (selectedAffiliation && selectedAffiliation !== 'all')
+      ? students.filter(s => s.affiliation === selectedAffiliation)
+      : students;
+
+    targetStudents.forEach(student => {
       // ดึง ST-5 ของนักเรียน เรียงตามเวลาเก่า -> ใหม่ (index 0 = ครั้งที่ 1)
       const userSt5 = st5Data
         .filter(d => d.uid === student.id || d.userId === student.id)
@@ -1542,7 +1546,7 @@ function FollowUpTrackerView({
       allRoundsData: rounds,
       comparisonData: comparisons,
       summaryStats: {
-        totalStudents: students.length,
+        totalStudents: targetStudents.length,
         countR1,
         countR2,
         countR3Plus,
@@ -1551,7 +1555,7 @@ function FollowUpTrackerView({
         successRate
       }
     };
-  }, [students, st5Data, behaviorData]);
+  }, [students, st5Data, behaviorData, selectedAffiliation]);
 
   // 2. ฟิลเตอร์ข้อมูลในโหมดแจกแจงรอบ (Rounds Tab)
   const filteredRounds = useMemo(() => {
@@ -1627,30 +1631,35 @@ function FollowUpTrackerView({
   return (
     <div className="space-y-6">
       {/* 🟢 หัวข้อและแถบเลือกสังกัด (ถ้ามี) */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
+        <div className="flex items-center gap-4 min-w-0 flex-1">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-purple-500/20 shrink-0">
             <History size={28} />
           </div>
-          <div>
-            <h2 className="text-xl md:text-2xl font-black text-slate-800">{title}</h2>
-            <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">{subtitle}</p>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-xl md:text-2xl font-black text-slate-800 break-words leading-tight">{title}</h2>
+            <p className="text-xs md:text-sm text-slate-500 font-medium mt-1 leading-relaxed">{subtitle}</p>
           </div>
         </div>
 
         {/* ตัวเลือกสังกัด (สำหรับ Superadmin) */}
         {availableAffiliations && availableAffiliations.length > 0 && onAffiliationChange && (
-          <div className="flex items-center gap-2 self-start md:self-auto bg-slate-50 p-2 rounded-2xl border border-slate-200">
-            <span className="text-xs font-bold text-slate-500 pl-2">สังกัด:</span>
+          <div className="flex items-center gap-2.5 self-start lg:self-auto shrink-0 bg-slate-50 p-2.5 rounded-2xl border border-slate-200 w-full sm:w-auto">
+            <span className="text-xs font-bold text-slate-500 pl-1.5 shrink-0 whitespace-nowrap">สังกัด:</span>
             <select
               value={selectedAffiliation}
               onChange={(e) => onAffiliationChange(e.target.value)}
-              className="bg-white px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 border border-slate-200 outline-none focus:ring-2 focus:ring-purple-400"
+              className="bg-white px-3 py-2 rounded-xl text-xs font-bold text-slate-700 border border-slate-200 outline-none focus:ring-2 focus:ring-purple-400 w-full sm:w-auto sm:max-w-xs md:max-w-sm truncate shadow-xs"
             >
-              <option value="all">ทุกสังกัด / ทุกโรงเรียน</option>
-              {availableAffiliations.map(aff => (
-                <option key={aff} value={aff}>{displayAffiliation(aff)}</option>
-              ))}
+              <option value="all">ทุกสังกัด / ทุกโรงเรียน ({students.length} คน)</option>
+              {availableAffiliations.map(aff => {
+                const count = students.filter(s => s.affiliation === aff).length;
+                return (
+                  <option key={aff} value={aff}>
+                    {displayAffiliation(aff)} {count > 0 ? `(${count} คน)` : ''}
+                  </option>
+                );
+              })}
             </select>
           </div>
         )}
