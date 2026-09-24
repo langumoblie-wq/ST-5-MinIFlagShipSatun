@@ -9,7 +9,7 @@ import {
   HeartPulse, Smile, Sparkles, ClipboardList, LayoutDashboard, UserSquare2, Star,
   ShieldAlert, Lightbulb, UserCheck, HelpCircle, BarChart2, Layers, RefreshCw, Database, Download, Terminal,
   Brain, Gamepad2, Zap, ShieldOff, Footprints, Flame, Bot, Printer, X, Trophy, Target, Pencil, Filter, ChevronDown, ChevronUp, TrendingDown, Minus,
-  Search, Calendar, ArrowRight, History
+  Search, Calendar, ArrowRight, History, ChevronLeft, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
 
 import { GAS_URL, gasRequest, getFirestore, doc, setDoc, getDoc, getDocs, onSnapshot, addDoc, updateDoc, deleteDoc, collection } from './lib/gasDb';
@@ -1444,10 +1444,39 @@ function FollowUpTrackerView({
   const [activeTab, setActiveTab] = useState<'rounds' | 'comparison'>('rounds');
   const [selectedRound, setSelectedRound] = useState<string>('all'); // 'all', '1', '2', '3', '4+', 'latest'
   const [selectedTrend, setSelectedTrend] = useState<string>('all'); // 'all', 'improved', 'stable', 'worsened'
-  const [selectedRisk, setSelectedRisk] = useState<string>('all'); // 'all', 'Low', 'Mild', 'Moderate', 'High', 'Severe'
+  const [selectedRisk, setSelectedRisk] = useState<string>('all'); // 'all', 'Low', 'Medium', 'High', 'Severe'
   const [searchQuery, setSearchQuery] = useState<string>('');
+  
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(25);
 
-  // 1. ประมวลผลข้อมูลการติดตามทั้งหมด
+  // รีเซ็ตหน้ากลับเป็นหน้า 1 เมื่อมีการเปลี่ยน Filter หรือสลับ Tab
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, selectedRound, selectedTrend, selectedRisk, searchQuery, selectedAffiliation, pageSize]);
+
+  // ฟังก์ชันแปลง Timestamp ให้อยู่ในรูปตัวเลข (Milliseconds) อย่างปลอดภัย
+  const getSafeTimestamp = (t: any): number => {
+    if (!t) return 0;
+    if (typeof t === 'number') return t;
+    if (t?.toMillis && typeof t.toMillis === 'function') return t.toMillis();
+    if (t?.seconds) return t.seconds * 1000;
+    const d = new Date(t).getTime();
+    return isNaN(d) ? 0 : d;
+  };
+
+  // ฟังก์ชันตรวจสอบสังกัด/โรงเรียน รองรับทั้ง String และ Array
+  const matchAffiliation = (studentAff: any, targetAff?: string) => {
+    if (!targetAff || targetAff === 'all') return true;
+    if (!studentAff) return false;
+    if (Array.isArray(studentAff)) {
+      return studentAff.some(a => String(a).trim().toLowerCase() === targetAff.trim().toLowerCase());
+    }
+    return String(studentAff).trim().toLowerCase() === targetAff.trim().toLowerCase();
+  };
+
+  // 1. ประมวลผลข้อมูลการติดตามทั้งหมด (Memoized Data Processing)
   const { allRoundsData, comparisonData, summaryStats } = useMemo(() => {
     const rounds: any[] = [];
     const comparisons: any[] = [];
@@ -1458,21 +1487,26 @@ function FollowUpTrackerView({
     let countImproved = 0;
 
     const targetStudents = (selectedAffiliation && selectedAffiliation !== 'all')
-      ? students.filter(s => s.affiliation === selectedAffiliation)
+      ? students.filter(s => matchAffiliation(s.affiliation, selectedAffiliation))
       : students;
 
     targetStudents.forEach(student => {
-      // ดึง ST-5 ของนักเรียน เรียงตามเวลาเก่า -> ใหม่ (index 0 = ครั้งที่ 1)
+      // ดึง ST-5 ของนักเรียน เรียงตามเวลาเก่า -> ใหม่ (index 0 = ครั้งที่ 1 ประเมินแรกเริ่ม)
       const userSt5 = st5Data
-        .filter(d => d.uid === student.id || d.userId === student.id)
-        .sort((a, b) => a.timestamp - b.timestamp);
+        .filter(d => String(d.uid) === String(student.id) || String(d.userId) === String(student.id))
+        .sort((a, b) => getSafeTimestamp(a.timestamp) - getSafeTimestamp(b.timestamp));
 
       const totalRounds = userSt5.length;
       if (totalRounds >= 1) countR1++;
       if (totalRounds >= 2) countR2++;
       if (totalRounds >= 3) countR3Plus++;
 
-      const userBehaviors = behaviorData.filter(d => d.targetUid === student.id);
+      // ดึงพฤติกรรมของนักเรียนคนนี้
+      const userBehaviors = behaviorData.filter(d => 
+        String(d.targetUid) === String(student.id) || 
+        String(d.uid) === String(student.id) || 
+        String(d.userId) === String(student.id)
+      );
       const positiveBehaviors = userBehaviors.filter(d => d.selections?.desirable?.length > 0);
 
       // สร้างชุดข้อมูลเปรียบเทียบ Pre vs Post สำหรับคนที่มีการประเมิน 2 ครั้งขึ้นไป
@@ -1486,13 +1520,14 @@ function FollowUpTrackerView({
         if (diff < 0) countImproved++;
 
         comparisons.push({
+          id: `comp-${student.id}`,
           student,
           totalRounds,
           preScore,
           postScore,
           diff,
-          preDate: preTest.timestamp,
-          postDate: postTest.timestamp,
+          preDate: getSafeTimestamp(preTest.timestamp),
+          postDate: getSafeTimestamp(postTest.timestamp),
           interventions: positiveBehaviors.length,
           preStatus: calculateST5(preScore),
           postStatus: calculateST5(postScore)
@@ -1512,22 +1547,25 @@ function FollowUpTrackerView({
         const diffFromPrev = prevScore !== null ? currentScore - prevScore : null;
 
         // ดึงกิจกรรมเชิงบวกที่สัมพันธ์กับรอบนี้
+        const st5Ts = getSafeTimestamp(st5.timestamp);
+        const prevTs = prevSt5 ? getSafeTimestamp(prevSt5.timestamp) : 0;
         const linkedBehaviors = userBehaviors.filter(b => {
           if (b.st5RoundId && b.st5RoundId === st5.id) return true;
-          if (prevSt5) return b.timestamp >= prevSt5.timestamp && b.timestamp <= st5.timestamp;
-          return b.timestamp <= st5.timestamp;
+          const bTs = getSafeTimestamp(b.timestamp);
+          if (prevSt5) return bTs >= prevTs && bTs <= st5Ts;
+          return bTs <= st5Ts;
         });
 
         const desirableCount = linkedBehaviors.reduce((acc, b) => acc + (b.selections?.desirable?.length || 0), 0);
 
         rounds.push({
-          id: `${student.id}-r${roundNumber}-${st5.id}`,
+          id: `${student.id}-r${roundNumber}-${st5.id || idx}`,
           student,
           roundNumber,
           totalRounds,
           isFirst,
           isLatest,
-          timestamp: st5.timestamp,
+          timestamp: st5Ts,
           score: currentScore,
           status,
           prevScore,
@@ -1557,21 +1595,32 @@ function FollowUpTrackerView({
     };
   }, [students, st5Data, behaviorData, selectedAffiliation]);
 
+  // ฟังก์ชันช่วยเหลือสำหรับตรวจสอบ Risk จาก calculateST5 (รองรับการแปลง Low, Medium, High, Severe)
+  const isMatchingRisk = (riskField: string, filterVal: string) => {
+    if (filterVal === 'all') return true;
+    if (filterVal === 'Low') return riskField === 'Low';
+    if (filterVal === 'Medium') return riskField === 'Medium' || riskField === 'Mild';
+    if (filterVal === 'High') return riskField === 'High' || riskField === 'Moderate';
+    if (filterVal === 'Severe') return riskField === 'Severe';
+    return riskField === filterVal;
+  };
+
   // 2. ฟิลเตอร์ข้อมูลในโหมดแจกแจงรอบ (Rounds Tab)
   const filteredRounds = useMemo(() => {
     return allRoundsData.filter(item => {
-      // ค้นหาชื่อ หรือ ID
+      // ค้นหาชื่อ รหัส หรือสังกัด
       if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchName = item.student.name && String(item.student.name).toLowerCase().includes(q);
-        const matchId = item.student.id && String(item.student.id).toLowerCase().includes(q);
-        const matchAff = item.student.affiliation && String(item.student.affiliation).toLowerCase().includes(q);
-        if (!matchName && !matchId && !matchAff) return false;
+        const q = searchQuery.toLowerCase().trim();
+        const matchName = item.student?.name && String(item.student.name).toLowerCase().includes(q);
+        const matchId = item.student?.id && String(item.student.id).toLowerCase().includes(q);
+        const matchStudentId = item.student?.studentId && String(item.student.studentId).toLowerCase().includes(q);
+        const matchAff = item.student?.affiliation && String(item.student.affiliation).toLowerCase().includes(q);
+        if (!matchName && !matchId && !matchStudentId && !matchAff) return false;
       }
 
-      // กรองสังกัด (ถ้ามี)
+      // กรองสังกัด
       if (selectedAffiliation && selectedAffiliation !== 'all') {
-        if (item.student.affiliation !== selectedAffiliation) return false;
+        if (!matchAffiliation(item.student?.affiliation, selectedAffiliation)) return false;
       }
 
       // กรองรอบการติดตาม
@@ -1598,7 +1647,7 @@ function FollowUpTrackerView({
 
       // กรองระดับความเสี่ยง ST-5
       if (selectedRisk !== 'all') {
-        if (item.status.risk !== selectedRisk) return false;
+        if (!isMatchingRisk(item.status?.risk, selectedRisk)) return false;
       }
 
       return true;
@@ -1608,29 +1657,74 @@ function FollowUpTrackerView({
   // 3. ฟิลเตอร์ข้อมูลในโหมดเปรียบเทียบ (Comparison Tab)
   const filteredComparisons = useMemo(() => {
     return comparisonData.filter(item => {
+      // ค้นหาชื่อ รหัส หรือสังกัด
       if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchName = item.student.name && String(item.student.name).toLowerCase().includes(q);
-        const matchId = item.student.id && String(item.student.id).toLowerCase().includes(q);
-        const matchAff = item.student.affiliation && String(item.student.affiliation).toLowerCase().includes(q);
-        if (!matchName && !matchId && !matchAff) return false;
+        const q = searchQuery.toLowerCase().trim();
+        const matchName = item.student?.name && String(item.student.name).toLowerCase().includes(q);
+        const matchId = item.student?.id && String(item.student.id).toLowerCase().includes(q);
+        const matchStudentId = item.student?.studentId && String(item.student.studentId).toLowerCase().includes(q);
+        const matchAff = item.student?.affiliation && String(item.student.affiliation).toLowerCase().includes(q);
+        if (!matchName && !matchId && !matchStudentId && !matchAff) return false;
       }
 
+      // กรองสังกัด
       if (selectedAffiliation && selectedAffiliation !== 'all') {
-        if (item.student.affiliation !== selectedAffiliation) return false;
+        if (!matchAffiliation(item.student?.affiliation, selectedAffiliation)) return false;
       }
 
-      if (selectedTrend === 'improved' && item.diff >= 0) return false;
-      if (selectedTrend === 'stable' && item.diff !== 0) return false;
-      if (selectedTrend === 'worsened' && item.diff <= 0) return false;
+      // กรองแนวโน้มผลสัมฤทธิ์
+      if (selectedTrend === 'improved') {
+        if (item.diff >= 0) return false;
+      } else if (selectedTrend === 'stable') {
+        if (item.diff !== 0) return false;
+      } else if (selectedTrend === 'worsened') {
+        if (item.diff <= 0) return false;
+      }
+
+      // กรองตามจำนวนรอบที่ติดตาม
+      if (selectedRound === '2') {
+        if (item.totalRounds !== 2) return false;
+      } else if (selectedRound === '3') {
+        if (item.totalRounds !== 3) return false;
+      } else if (selectedRound === '4+') {
+        if (item.totalRounds < 4) return false;
+      }
+
+      // กรองระดับความเสี่ยงรอบล่าสุด
+      if (selectedRisk !== 'all') {
+        if (!isMatchingRisk(item.postStatus?.risk, selectedRisk)) return false;
+      }
 
       return true;
     });
-  }, [comparisonData, searchQuery, selectedAffiliation, selectedTrend]);
+  }, [comparisonData, searchQuery, selectedAffiliation, selectedTrend, selectedRound, selectedRisk]);
+
+  // คำนวณชุดข้อมูลสำหรับแสดงผลในหน้าปัจจุบัน (Pagination Slice)
+  const activeList = activeTab === 'rounds' ? filteredRounds : filteredComparisons;
+  const totalCount = activeList.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const paginatedList = useMemo(() => {
+    if (pageSize >= 9999) return activeList;
+    const startIndex = (safeCurrentPage - 1) * pageSize;
+    return activeList.slice(startIndex, startIndex + pageSize);
+  }, [activeList, safeCurrentPage, pageSize]);
+
+  // ฟังก์ชันล้างตัวกรองทั้งหมด
+  const handleClearFilters = () => {
+    setSelectedRound('all');
+    setSelectedTrend('all');
+    setSelectedRisk('all');
+    setSearchQuery('');
+    setCurrentPage(1);
+  };
+
+  const isFilterActive = selectedRound !== 'all' || selectedTrend !== 'all' || selectedRisk !== 'all' || searchQuery.trim() !== '';
 
   return (
     <div className="space-y-6">
-      {/* 🟢 หัวข้อและแถบเลือกสังกัด (ถ้ามี) */}
+      {/* 🟢 หัวข้อและแถบเลือกสังกัด (สำหรับ SuperAdmin / Admin) */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
         <div className="flex items-center gap-4 min-w-0 flex-1">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-purple-500/20 shrink-0">
@@ -1642,7 +1736,7 @@ function FollowUpTrackerView({
           </div>
         </div>
 
-        {/* ตัวเลือกสังกัด (สำหรับ Superadmin) */}
+        {/* ตัวเลือกสังกัด */}
         {availableAffiliations && availableAffiliations.length > 0 && onAffiliationChange && (
           <div className="flex items-center gap-2.5 self-start lg:self-auto shrink-0 bg-slate-50 p-2.5 rounded-2xl border border-slate-200 w-full sm:w-auto">
             <span className="text-xs font-bold text-slate-500 pl-1.5 shrink-0 whitespace-nowrap">สังกัด:</span>
@@ -1653,7 +1747,7 @@ function FollowUpTrackerView({
             >
               <option value="all">ทุกสังกัด / ทุกโรงเรียน ({students.length} คน)</option>
               {availableAffiliations.map(aff => {
-                const count = students.filter(s => s.affiliation === aff).length;
+                const count = students.filter(s => matchAffiliation(s.affiliation, aff)).length;
                 return (
                   <option key={aff} value={aff}>
                     {displayAffiliation(aff)} {count > 0 ? `(${count} คน)` : ''}
@@ -1736,25 +1830,25 @@ function FollowUpTrackerView({
 
       {/* 🟢 แถบสลับมุมมอง (Tabs) และกล่องเครื่องมือฟิลเตอร์ (Toolbar) */}
       <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-5">
-        {/* แถบสลับ Tab */}
+        {/* แถบสลับ Tab และตัวแสดงจำนวนผลลัพธ์ */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
           <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-2xl self-start sm:self-auto">
             <button
               onClick={() => setActiveTab('rounds')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
                 activeTab === 'rounds'
-                  ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+                  ? 'bg-white text-purple-700 shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <ClipboardList size={16} />
+              <Calendar size={16} />
               จำแนกตามรายการติดตามครั้งที่ ({allRoundsData.length})
             </button>
             <button
               onClick={() => setActiveTab('comparison')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
                 activeTab === 'comparison'
-                  ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+                  ? 'bg-white text-purple-700 shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
@@ -1763,9 +1857,12 @@ function FollowUpTrackerView({
             </button>
           </div>
 
-          <span className="text-xs font-bold text-slate-400">
-            แสดงผล: {activeTab === 'rounds' ? filteredRounds.length : filteredComparisons.length} รายการ
-          </span>
+          <div className="flex items-center gap-3 self-end sm:self-auto">
+            <span className="text-xs font-bold text-slate-500 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl">
+              แสดงผล: <span className="text-purple-600 font-black">{totalCount}</span> รายการ
+              {isFilterActive && <span className="text-slate-400 font-normal"> (จาก {activeTab === 'rounds' ? allRoundsData.length : comparisonData.length})</span>}
+            </span>
+          </div>
         </div>
 
         {/* ตัวกรอง (Filter Controls) */}
@@ -1775,39 +1872,48 @@ function FollowUpTrackerView({
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="ค้นหาชื่อ, รหัสนักเรียน..."
+              placeholder="ค้นหาชื่อ, รหัสนักเรียน, สังกัด..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none focus:ring-2 focus:ring-purple-400 focus:bg-white transition"
+              className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none focus:ring-2 focus:ring-purple-400 focus:bg-white transition"
             />
             {searchQuery && (
-              <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+              <button 
+                onClick={() => setSearchQuery('')} 
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                title="ล้างข้อความค้นหา"
+              >
                 <X size={14} />
               </button>
             )}
           </div>
 
-          {/* 2. ฟิลเตอร์รอบการติดตาม (เฉพาะแท็บ rounds) */}
-          {activeTab === 'rounds' ? (
-            <div>
-              <select
-                value={selectedRound}
-                onChange={(e) => setSelectedRound(e.target.value)}
-                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-400"
-              >
-                <option value="all">🔍 ทุกรอบการติดตาม</option>
-                <option value="latest">⭐ เฉพาะรอบล่าสุดของแต่ละคน</option>
-                <option value="1">🌱 ติดตามครั้งที่ 1 (ประเมินแรกเริ่ม / Baseline)</option>
-                <option value="2">🔄 ติดตามครั้งที่ 2 (ติดตามผลระยะที่ 1)</option>
-                <option value="3">📊 ติดตามครั้งที่ 3 (ติดตามผลระยะที่ 2)</option>
-                <option value="4+">✨ ติดตามครั้งที่ 4 ขึ้นไป (ติดตามต่อเนื่อง)</option>
-              </select>
-            </div>
-          ) : (
-            <div className="flex items-center px-3 py-2.5 bg-purple-50/50 border border-purple-100 rounded-xl text-xs font-bold text-purple-700">
-              📌 เปรียบเทียบรอบแรก กับ รอบล่าสุด
-            </div>
-          )}
+          {/* 2. ฟิลเตอร์รอบการติดตาม */}
+          <div>
+            <select
+              value={selectedRound}
+              onChange={(e) => setSelectedRound(e.target.value)}
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-400"
+            >
+              {activeTab === 'rounds' ? (
+                <>
+                  <option value="all">🔍 ทุกรอบการติดตาม</option>
+                  <option value="latest">⭐ เฉพาะรอบล่าสุดของแต่ละคน</option>
+                  <option value="1">🌱 ติดตามครั้งที่ 1 (ประเมินแรกเริ่ม / Baseline)</option>
+                  <option value="2">🔄 ติดตามครั้งที่ 2 (ติดตามผลระยะที่ 1)</option>
+                  <option value="3">📊 ติดตามครั้งที่ 3 (ติดตามผลระยะที่ 2)</option>
+                  <option value="4+">✨ ติดตามครั้งที่ 4 ขึ้นไป (ติดตามต่อเนื่อง)</option>
+                </>
+              ) : (
+                <>
+                  <option value="all">🔍 ทุกกลุ่มที่มีการติดตาม (2 ครั้งขึ้นไป)</option>
+                  <option value="2">🔄 ติดตามครบ 2 ครั้งพอดี</option>
+                  <option value="3">📊 ติดตาม 3 ครั้ง</option>
+                  <option value="4+">✨ ติดตาม 4 ครั้งขึ้นไป (ติดตามต่อเนื่อง)</option>
+                </>
+              )}
+            </select>
+          </div>
 
           {/* 3. ฟิลเตอร์แนวโน้มผลลัพธ์ (ดีขึ้น/คงที่/เพิ่มขึ้น) */}
           <div>
@@ -1824,39 +1930,26 @@ function FollowUpTrackerView({
           </div>
 
           {/* 4. ฟิลเตอร์ระดับความเสี่ยง ST-5 */}
-          {activeTab === 'rounds' ? (
-            <div>
-              <select
-                value={selectedRisk}
-                onChange={(e) => setSelectedRisk(e.target.value)}
-                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-400"
-              >
-                <option value="all">🎯 ทุกระดับความเครียด</option>
-                <option value="Low">🟢 เครียดน้อย (ปกติ 0-4)</option>
-                <option value="Mild">🟡 เครียดปานกลาง (5-7)</option>
-                <option value="Moderate">🟠 เครียดมาก (8-9)</option>
-                <option value="Severe">🔴 เครียดมากที่สุด (10-15)</option>
-              </select>
-            </div>
-          ) : (
-            <div className="flex items-center justify-end">
-              {(selectedTrend !== 'all' || searchQuery) && (
-                <button
-                  onClick={() => { setSelectedTrend('all'); setSearchQuery(''); }}
-                  className="text-xs font-bold text-purple-600 hover:text-purple-700 underline"
-                >
-                  ล้างตัวกรองทั้งหมด
-                </button>
-              )}
-            </div>
-          )}
+          <div>
+            <select
+              value={selectedRisk}
+              onChange={(e) => setSelectedRisk(e.target.value)}
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-400"
+            >
+              <option value="all">🎯 ทุกระดับความเครียด {activeTab === 'comparison' ? '(รอบล่าสุด)' : ''}</option>
+              <option value="Low">🟢 เครียดน้อย (ปกติ 0-4)</option>
+              <option value="Medium">🟡 เครียดปานกลาง (5-7)</option>
+              <option value="High">🟠 เครียดมาก (8-9)</option>
+              <option value="Severe">🔴 เครียดมากที่สุด (10-15)</option>
+            </select>
+          </div>
         </div>
 
-        {/* ปุ่มลัดเลือกรายการติดตามครั้งที่ (Quick Pills Filter) */}
-        {activeTab === 'rounds' && (
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-1 hide-scrollbar">
-            <span className="text-[11px] font-bold text-slate-400 shrink-0">เลือกรอบด่วน:</span>
-            {[
+        {/* ปุ่มลัดเลือกด่วน (Quick Pills Filter) */}
+        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
+          <span className="text-[11px] font-bold text-slate-400 shrink-0">เลือกรอบด่วน:</span>
+          {activeTab === 'rounds' ? (
+            [
               { id: 'all', label: 'ทุกรอบ' },
               { id: 'latest', label: 'รอบล่าสุด' },
               { id: '1', label: 'ครั้งที่ 1 (แรกเริ่ม)' },
@@ -1869,36 +1962,56 @@ function FollowUpTrackerView({
                 onClick={() => setSelectedRound(pill.id)}
                 className={`px-3 py-1 rounded-full text-xs font-bold transition whitespace-nowrap border ${
                   selectedRound === pill.id
-                    ? 'bg-purple-100 text-purple-700 border-purple-300'
+                    ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
                 {pill.label}
               </button>
-            ))}
-
-            {(selectedRound !== 'all' || selectedTrend !== 'all' || selectedRisk !== 'all' || searchQuery) && (
+            ))
+          ) : (
+            [
+              { id: 'all', label: 'ทุกคนที่เปรียบเทียบได้' },
+              { id: '2', label: 'ติดตาม 2 ครั้ง' },
+              { id: '3', label: 'ติดตาม 3 ครั้ง' },
+              { id: '4+', label: 'ติดตาม 4 ครั้งขึ้นไป' },
+            ].map(pill => (
               <button
-                onClick={() => { setSelectedRound('all'); setSelectedTrend('all'); setSelectedRisk('all'); setSearchQuery(''); }}
-                className="ml-auto text-xs font-bold text-rose-500 hover:text-rose-600 px-3 py-1 rounded-full border border-rose-200 hover:bg-rose-50 transition shrink-0"
+                key={pill.id}
+                onClick={() => setSelectedRound(pill.id)}
+                className={`px-3 py-1 rounded-full text-xs font-bold transition whitespace-nowrap border ${
+                  selectedRound === pill.id
+                    ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
               >
-                ล้างตัวกรอง
+                {pill.label}
               </button>
-            )}
-          </div>
-        )}
+            ))
+          )}
+
+          {isFilterActive && (
+            <button
+              onClick={handleClearFilters}
+              className="ml-auto text-xs font-bold text-rose-500 hover:text-rose-600 hover:bg-rose-50 px-3 py-1 rounded-full border border-rose-200 transition shrink-0 flex items-center gap-1"
+            >
+              <X size={12} /> ล้างตัวกรองทั้งหมด
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 🟢 ส่วนตารางแสดงข้อมูล (Data Tables) */}
       {activeTab === 'rounds' ? (
         /* TAB 1: จำแนกตามรายการติดตามครั้งที่ (Round-by-Round Breakdown) */
         <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
-          {filteredRounds.length > 0 ? (
+          {totalCount > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse min-w-[850px]">
-                <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 text-xs font-bold">
+              <table className="w-full text-left border-collapse min-w-[880px]">
+                <thead className="bg-slate-50/95 backdrop-blur-xs border-b border-slate-200 text-slate-500 text-xs font-bold sticky top-0 z-10">
                   <tr>
-                    <th className="p-4 pl-6">ชื่อ-สกุล / ข้อมูลผู้เรียน</th>
+                    <th className="p-4 pl-6 w-16 text-center">ลำดับ</th>
+                    <th className="p-4">ชื่อ-สกุล / ข้อมูลผู้เรียน</th>
                     {showAffiliation && <th className="p-4">สังกัด/โรงเรียน</th>}
                     <th className="p-4 text-center">รายการติดตามครั้งที่</th>
                     <th className="p-4 text-center">คะแนน ST-5 & ระดับ</th>
@@ -1908,34 +2021,37 @@ function FollowUpTrackerView({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
-                  {filteredRounds.map((row, idx) => {
+                  {paginatedList.map((row: any, idx: number) => {
+                    const seqNumber = (safeCurrentPage - 1) * pageSize + idx + 1;
                     return (
-                      <tr key={row.id} className="hover:bg-purple-50/30 transition-colors">
+                      <tr key={`round-row-${row.id}-${seqNumber}`} className="hover:bg-purple-50/30 transition-colors">
+                        {/* 0. ลำดับที่ในชุดข้อมูลปัจจุบัน */}
+                        <td className="p-4 pl-6 text-center">
+                          <span className="w-8 h-8 rounded-full bg-slate-100 text-purple-600 font-bold inline-flex items-center justify-center text-xs border border-slate-200 shadow-2xs">
+                            {seqNumber}
+                          </span>
+                        </td>
+
                         {/* 1. ข้อมูลผู้เรียน */}
-                        <td className="p-4 pl-6">
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-full bg-slate-100 text-purple-600 font-bold flex items-center justify-center text-xs shrink-0 border border-slate-200">
-                              {idx + 1}
-                            </div>
-                            <div>
-                              <p className="font-bold text-slate-800">
-                                {onSelectStudent ? (
-                                  <button
-                                    onClick={() => onSelectStudent(row.student.id)}
-                                    className="hover:text-purple-600 hover:underline transition text-left"
-                                  >
-                                    {row.student.name}
-                                  </button>
-                                ) : (
-                                  row.student.name
-                                )}
-                              </p>
-                              <div className="flex items-center gap-2 mt-1">
-                                <span className="text-[10px] text-slate-400 font-mono">@{row.student.id}</span>
-                                <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-md">
-                                  ทำแล้ว {row.totalRounds} ครั้ง
-                                </span>
-                              </div>
+                        <td className="p-4">
+                          <div>
+                            <p className="font-bold text-slate-800">
+                              {onSelectStudent ? (
+                                <button
+                                  onClick={() => onSelectStudent(row.student.id)}
+                                  className="hover:text-purple-600 hover:underline transition text-left"
+                                >
+                                  {row.student.name}
+                                </button>
+                              ) : (
+                                row.student.name
+                              )}
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-[10px] text-slate-400 font-mono">@{row.student.id}</span>
+                              <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-md">
+                                ทำแล้ว {row.totalRounds} ครั้ง
+                              </span>
                             </div>
                           </div>
                         </td>
@@ -1963,7 +2079,7 @@ function FollowUpTrackerView({
                             </span>
                             <div className="flex items-center gap-1 mt-1 text-[11px] text-slate-400 font-medium">
                               <Calendar size={12} />
-                              {new Date(row.timestamp).toLocaleDateString('th-TH', { dateStyle: 'short' })}
+                              {row.timestamp ? new Date(row.timestamp).toLocaleDateString('th-TH', { dateStyle: 'short' }) : '-'}
                               {row.isLatest && row.totalRounds > 1 && (
                                 <span className="text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.2 rounded-md ml-1">
                                   ล่าสุด
@@ -2024,7 +2140,7 @@ function FollowUpTrackerView({
                               onClick={() => onSelectStudent(row.student.id)}
                               className="text-xs font-bold text-purple-600 hover:text-purple-700 hover:bg-purple-50 px-3 py-1.5 rounded-xl border border-purple-200 transition inline-flex items-center gap-1"
                             >
-                              ดูรายละเอียด <ChevronRight size={14} />
+                              ดูประวัติ <ChevronRight size={14} />
                             </button>
                           ) : (
                             <span className="text-xs text-slate-400">ครบถ้วน</span>
@@ -2040,102 +2156,272 @@ function FollowUpTrackerView({
             <div className="p-12 text-center">
               <ClipboardList className="mx-auto text-slate-300 mb-3" size={48} />
               <h3 className="font-bold text-slate-700 text-base">ไม่พบข้อมูลรายการติดตามตามเงื่อนไขที่เลือก</h3>
-              <p className="text-slate-400 text-xs mt-1">ลองเปลี่ยนรอบการติดตาม หรือล้างคำค้นหาดูนะคะ</p>
+              <p className="text-slate-400 text-xs mt-1">ลองเปลี่ยนรอบการติดตาม หรือกดปุ่ม "ล้างตัวกรองทั้งหมด" ดูนะคะ</p>
+              {isFilterActive && (
+                <button
+                  onClick={handleClearFilters}
+                  className="mt-4 px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-xl text-xs font-bold transition border border-purple-200"
+                >
+                  ล้างตัวกรองทั้งหมด
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* แถบการแบ่งหน้า (Pagination Footer) */}
+          {totalCount > 0 && (
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <span>แสดง {Math.min((safeCurrentPage - 1) * pageSize + 1, totalCount)} - {Math.min(safeCurrentPage * pageSize, totalCount)} จาก {totalCount} รายการ</span>
+                <span className="text-slate-300">|</span>
+                <span>จำนวนต่อหน้า:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-700 outline-none"
+                >
+                  <option value={15}>15</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={999999}>ทั้งหมด</option>
+                </select>
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setCurrentPage(1)}
+                    disabled={safeCurrentPage === 1}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition"
+                    title="หน้าแรก"
+                  >
+                    <ChevronsLeft size={16} />
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={safeCurrentPage === 1}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition"
+                    title="หน้าก่อนหน้า"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span className="px-3 py-1 font-bold text-slate-700 bg-white border border-slate-200 rounded-lg">
+                    หน้า {safeCurrentPage} / {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={safeCurrentPage === totalPages}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition"
+                    title="หน้าถัดไป"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={safeCurrentPage === totalPages}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition"
+                    title="หน้าสุดท้าย"
+                  >
+                    <ChevronsRight size={16} />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
       ) : (
         /* TAB 2: เปรียบเทียบผลสัมฤทธิ์ก่อน-หลัง (Pre vs Post) */
         <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
-          {filteredComparisons.length > 0 ? (
+          {totalCount > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse min-w-[850px]">
-                <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 text-xs font-bold">
+              <table className="w-full text-left border-collapse min-w-[880px]">
+                <thead className="bg-slate-50/95 backdrop-blur-xs border-b border-slate-200 text-slate-500 text-xs font-bold sticky top-0 z-10">
                   <tr>
-                    <th className="p-4 pl-6">ชื่อ-สกุล / ข้อมูลผู้เรียน</th>
+                    <th className="p-4 pl-6 w-16 text-center">ลำดับ</th>
+                    <th className="p-4">ชื่อ-สกุล / ข้อมูลผู้เรียน</th>
                     {showAffiliation && <th className="p-4">สังกัด/โรงเรียน</th>}
                     <th className="p-4 text-center">รอบที่ติดตามทั้งหมด</th>
                     <th className="p-4 text-center">กิจกรรมเชิงบวก</th>
-                    <th className="p-4 text-center">ก่อนทำกิจกรรม<br/><span className="text-[10px] font-normal text-slate-400">(ST-5 แรก)</span></th>
+                    <th className="p-4 text-center">ก่อนทำกิจกรรม<br/><span className="text-[10px] font-normal text-slate-400">(ST-5 ครั้งแรก)</span></th>
                     <th className="p-4 text-center">หลังทำกิจกรรม<br/><span className="text-[10px] font-normal text-slate-400">(ST-5 ล่าสุด)</span></th>
                     <th className="p-4 text-center">ผลลัพธ์ภาพรวม</th>
                     <th className="p-4 pr-6 text-right">การจัดการ</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
-                  {filteredComparisons.map((row, idx) => (
-                    <tr key={`comp-${row.student.id}-${idx}`} className="hover:bg-purple-50/30 transition-colors">
-                      <td className="p-4 pl-6 font-bold text-slate-800">
-                        {onSelectStudent ? (
-                          <button
-                            onClick={() => onSelectStudent(row.student.id)}
-                            className="hover:text-purple-600 hover:underline transition text-left"
-                          >
-                            {row.student.name}
-                          </button>
-                        ) : (
-                          row.student.name
-                        )}
-                        <p className="text-[10px] text-slate-400 font-mono mt-0.5">@{row.student.id}</p>
-                      </td>
-                      {showAffiliation && (
-                        <td className="p-4 text-xs font-medium text-slate-600">
-                          {displayAffiliation(row.student.affiliation)}
+                  {paginatedList.map((row: any, idx: number) => {
+                    const seqNumber = (safeCurrentPage - 1) * pageSize + idx + 1;
+                    return (
+                      <tr key={`comp-row-${row.id}-${seqNumber}`} className="hover:bg-purple-50/30 transition-colors">
+                        {/* 0. ลำดับ */}
+                        <td className="p-4 pl-6 text-center">
+                          <span className="w-8 h-8 rounded-full bg-slate-100 text-purple-600 font-bold inline-flex items-center justify-center text-xs border border-slate-200 shadow-2xs">
+                            {seqNumber}
+                          </span>
                         </td>
-                      )}
-                      <td className="p-4 text-center">
-                        <span className="bg-purple-50 text-purple-700 px-3 py-1 rounded-full text-xs font-black border border-purple-200">
-                          ติดตาม {row.totalRounds} ครั้ง
-                        </span>
-                      </td>
-                      <td className="p-4 text-center">
-                        <span className="bg-teal-50 text-teal-600 px-2.5 py-1 rounded-lg text-xs font-bold border border-teal-100">
-                          {row.interventions} ครั้ง
-                        </span>
-                      </td>
-                      <td className="p-4 text-center">
-                        <span className="font-black text-slate-700">{row.preScore}</span>
-                        <div className="text-[10px] text-slate-400">{row.preStatus.level}</div>
-                      </td>
-                      <td className="p-4 text-center">
-                        <span className="font-black text-slate-800">{row.postScore}</span>
-                        <div className="text-[10px] text-slate-400">{row.postStatus.level}</div>
-                      </td>
-                      <td className="p-4 text-center">
-                        {row.diff < 0 ? (
-                          <span className="text-teal-600 font-bold flex items-center justify-center gap-1 text-xs bg-teal-50 px-2.5 py-1 rounded-lg border border-teal-100 w-max mx-auto">
-                            <TrendingDown size={14}/> ลดลง {Math.abs(row.diff)} (ดีขึ้น)
-                          </span>
-                        ) : row.diff > 0 ? (
-                          <span className="text-rose-600 font-bold flex items-center justify-center gap-1 text-xs bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-100 w-max mx-auto">
-                            <TrendingUp size={14}/> เพิ่ม {row.diff} (เฝ้าระวัง)
-                          </span>
-                        ) : (
-                          <span className="text-slate-500 font-bold flex items-center justify-center gap-1 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200 w-max mx-auto">
-                            <Minus size={14}/> คงที่ ({row.postScore})
-                          </span>
+
+                        {/* 1. ผู้เรียน */}
+                        <td className="p-4 font-bold text-slate-800">
+                          {onSelectStudent ? (
+                            <button
+                              onClick={() => onSelectStudent(row.student.id)}
+                              className="hover:text-purple-600 hover:underline transition text-left"
+                            >
+                              {row.student.name}
+                            </button>
+                          ) : (
+                            row.student.name
+                          )}
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[10px] text-slate-400 font-mono">@{row.student.id}</span>
+                          </div>
+                        </td>
+
+                        {/* 2. สังกัด */}
+                        {showAffiliation && (
+                          <td className="p-4 text-xs font-medium text-slate-600">
+                            {displayAffiliation(row.student.affiliation)}
+                          </td>
                         )}
-                      </td>
-                      <td className="p-4 pr-6 text-right">
-                        {onSelectStudent && (
-                          <button
-                            onClick={() => onSelectStudent(row.student.id)}
-                            className="text-xs font-bold text-purple-600 hover:text-purple-700 hover:bg-purple-50 px-3 py-1.5 rounded-xl border border-purple-200 transition inline-flex items-center gap-1"
-                          >
-                            เจาะลึก <ChevronRight size={14} />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+
+                        {/* 3. จำนวนรอบที่ติดตาม */}
+                        <td className="p-4 text-center">
+                          <span className="bg-purple-50 text-purple-700 px-3 py-1 rounded-full text-xs font-black border border-purple-200">
+                            ติดตาม {row.totalRounds} ครั้ง
+                          </span>
+                        </td>
+
+                        {/* 4. กิจกรรมเชิงบวก */}
+                        <td className="p-4 text-center">
+                          <span className="bg-teal-50 text-teal-600 px-2.5 py-1 rounded-lg text-xs font-bold border border-teal-100">
+                            {row.interventions} ครั้ง
+                          </span>
+                        </td>
+
+                        {/* 5. Pre-test */}
+                        <td className="p-4 text-center">
+                          <span className="font-black text-slate-700 text-base">{row.preScore}</span>
+                          <div className="text-[10px] text-slate-400">{row.preStatus.level}</div>
+                        </td>
+
+                        {/* 6. Post-test */}
+                        <td className="p-4 text-center">
+                          <span className="font-black text-slate-800 text-base">{row.postScore}</span>
+                          <div className="text-[10px] text-slate-400">{row.postStatus.level}</div>
+                        </td>
+
+                        {/* 7. ผลลัพธ์ภาพรวม */}
+                        <td className="p-4 text-center">
+                          {row.diff < 0 ? (
+                            <span className="text-teal-600 font-bold flex items-center justify-center gap-1 text-xs bg-teal-50 px-2.5 py-1 rounded-lg border border-teal-100 w-max mx-auto shadow-2xs">
+                              <TrendingDown size={14}/> ลดลง {Math.abs(row.diff)} (ดีขึ้น)
+                            </span>
+                          ) : row.diff > 0 ? (
+                            <span className="text-rose-600 font-bold flex items-center justify-center gap-1 text-xs bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-100 w-max mx-auto shadow-2xs">
+                              <TrendingUp size={14}/> เพิ่ม {row.diff} (เฝ้าระวัง)
+                            </span>
+                          ) : (
+                            <span className="text-slate-500 font-bold flex items-center justify-center gap-1 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200 w-max mx-auto shadow-2xs">
+                              <Minus size={14}/> คงที่ ({row.postScore})
+                            </span>
+                          )}
+                        </td>
+
+                        {/* 8. Action */}
+                        <td className="p-4 pr-6 text-right">
+                          {onSelectStudent ? (
+                            <button
+                              onClick={() => onSelectStudent(row.student.id)}
+                              className="text-xs font-bold text-purple-600 hover:text-purple-700 hover:bg-purple-50 px-3 py-1.5 rounded-xl border border-purple-200 transition inline-flex items-center gap-1"
+                            >
+                              เจาะลึก <ChevronRight size={14} />
+                            </button>
+                          ) : (
+                            <span className="text-xs text-slate-400">ครบถ้วน</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           ) : (
             <div className="p-12 text-center">
               <Activity className="mx-auto text-slate-300 mb-3" size={48} />
-              <h3 className="font-bold text-slate-700 text-base">ยังไม่มีข้อมูลนักเรียนที่ได้รับการประเมินเปรียบเทียบ</h3>
-              <p className="text-slate-400 text-xs mt-1">ระบบจะแสดงผลเมื่อนักเรียนได้รับการติดตามประเมิน ST-5 อย่างน้อย 2 ครั้ง</p>
+              <h3 className="font-bold text-slate-700 text-base">ไม่พบข้อมูลนักเรียนที่ได้รับการประเมินเปรียบเทียบตามเงื่อนไข</h3>
+              <p className="text-slate-400 text-xs mt-1">ระบบจะแสดงผลเมื่อนักเรียนได้รับการติดตามประเมิน ST-5 อย่างน้อย 2 ครั้งขึ้นไป</p>
+              {isFilterActive && (
+                <button
+                  onClick={handleClearFilters}
+                  className="mt-4 px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-xl text-xs font-bold transition border border-purple-200"
+                >
+                  ล้างตัวกรองทั้งหมด
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* แถบการแบ่งหน้า (Pagination Footer) */}
+          {totalCount > 0 && (
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <span>แสดง {Math.min((safeCurrentPage - 1) * pageSize + 1, totalCount)} - {Math.min(safeCurrentPage * pageSize, totalCount)} จาก {totalCount} รายการ</span>
+                <span className="text-slate-300">|</span>
+                <span>จำนวนต่อหน้า:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-700 outline-none"
+                >
+                  <option value={15}>15</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={999999}>ทั้งหมด</option>
+                </select>
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setCurrentPage(1)}
+                    disabled={safeCurrentPage === 1}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition"
+                    title="หน้าแรก"
+                  >
+                    <ChevronsLeft size={16} />
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={safeCurrentPage === 1}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition"
+                    title="หน้าก่อนหน้า"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span className="px-3 py-1 font-bold text-slate-700 bg-white border border-slate-200 rounded-lg">
+                    หน้า {safeCurrentPage} / {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={safeCurrentPage === totalPages}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition"
+                    title="หน้าถัดไป"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={safeCurrentPage === totalPages}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition"
+                    title="หน้าสุดท้าย"
+                  >
+                    <ChevronsRight size={16} />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
