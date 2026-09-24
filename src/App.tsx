@@ -180,7 +180,7 @@ const displayAffiliation = (aff) => {
 
 // Google Sheets Integration
 
-const GOOGLE_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbwyPyksvhRl8wwGniD99SMtQFe7BnSU3w-pgJaIopomxxoM9xMFyFTidZAnsg32nHuk/exec";
+const GOOGLE_WEBAPP_URL = GAS_URL;
 
 const syncToGoogleSheet = async (type, payload) => {
   if (!GOOGLE_WEBAPP_URL) return;
@@ -328,26 +328,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
     const initApp = async () => {
       try {
         const savedSession = localStorage.getItem(`${appId}_session`);
         if (savedSession) {
           const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', savedSession);
           const snap = await getDoc(docRef);
-          if (snap.exists()) {
-            setProfile({ id: snap.id, ...snap.data() });
-          } else {
-            localStorage.removeItem(`${appId}_session`);
+          if (isMounted) {
+            if (snap && snap.exists && snap.exists()) {
+              setProfile({ id: snap.id, ...snap.data() });
+            } else {
+              localStorage.removeItem(`${appId}_session`);
+            }
           }
         }
-      } catch (error) {
-        console.error("Init error:", error);
-        setAlertConfig({ isOpen: true, message: error.message || 'เกิดข้อผิดพลาดในการเริ่มต้นระบบ', type: 'error' });
+      } catch (error: any) {
+        console.warn("Init session restore warning:", error);
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
     initApp();
+    return () => { isMounted = false; };
   }, []);
 
   useEffect(() => {
@@ -1466,14 +1471,23 @@ function FollowUpTrackerView({
     return isNaN(d) ? 0 : d;
   };
 
-  // ฟังก์ชันตรวจสอบสังกัด/โรงเรียน รองรับทั้ง String และ Array
-  const matchAffiliation = (studentAff: any, targetAff?: string) => {
+  // ฟังก์ชันตรวจสอบสังกัด/โรงเรียน รองรับทั้ง String, Array และ Comma-separated อย่างปลอดภัย
+  const matchAffiliation = (studentAff: any, targetAff?: any) => {
     if (!targetAff || targetAff === 'all') return true;
     if (!studentAff) return false;
-    if (Array.isArray(studentAff)) {
-      return studentAff.some(a => String(a).trim().toLowerCase() === targetAff.trim().toLowerCase());
-    }
-    return String(studentAff).trim().toLowerCase() === targetAff.trim().toLowerCase();
+    
+    // Normalize targetAff safely without calling trim on non-string
+    const targetStr = (Array.isArray(targetAff) ? targetAff.join(',') : String(targetAff || '')).trim().toLowerCase();
+    if (!targetStr || targetStr === 'all') return true;
+
+    // Normalize student affiliations safely
+    const studentList: string[] = Array.isArray(studentAff)
+      ? studentAff.map(a => String(a || '').trim().toLowerCase())
+      : String(studentAff || '').split(',').map(a => a.trim().toLowerCase());
+
+    const targetList: string[] = targetStr.split(',').map(a => a.trim()).filter(Boolean);
+
+    return studentList.some(s => targetList.some(t => s === t || s.includes(t) || t.includes(s)));
   };
 
   // 1. ประมวลผลข้อมูลการติดตามทั้งหมด (Memoized Data Processing)
@@ -1746,10 +1760,11 @@ function FollowUpTrackerView({
               className="bg-white px-3 py-2 rounded-xl text-xs font-bold text-slate-700 border border-slate-200 outline-none focus:ring-2 focus:ring-purple-400 w-full sm:w-auto sm:max-w-xs md:max-w-sm truncate shadow-xs"
             >
               <option value="all">ทุกสังกัด / ทุกโรงเรียน ({students.length} คน)</option>
-              {availableAffiliations.map(aff => {
+              {availableAffiliations.map((aff: any) => {
+                const affStr = Array.isArray(aff) ? aff.join(', ') : String(aff || '');
                 const count = students.filter(s => matchAffiliation(s.affiliation, aff)).length;
                 return (
-                  <option key={aff} value={aff}>
+                  <option key={affStr} value={affStr}>
                     {displayAffiliation(aff)} {count > 0 ? `(${count} คน)` : ''}
                   </option>
                 );
@@ -4151,10 +4166,19 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
   const pendingAdmins = displayUsers.filter(u => u.role === 'admin' && u.status === 'pending');
 
   const availableAffiliations = useMemo(() => {
-    if (profile.id === 'rung') {
-      return Array.from(new Set(users.map(u => u.affiliation).filter(Boolean)));
-    }
-    return Array.isArray(profile.affiliation) ? profile.affiliation : [profile.affiliation].filter(Boolean);
+    const set = new Set<string>();
+    const list = profile.id === 'rung'
+      ? users.map((u: any) => u.affiliation)
+      : (Array.isArray(profile.affiliation) ? profile.affiliation : [profile.affiliation]);
+    
+    list.filter(Boolean).forEach((item: any) => {
+      if (Array.isArray(item)) {
+        item.forEach(sub => { if (sub && String(sub).trim()) set.add(String(sub).trim()); });
+      } else if (typeof item === 'string') {
+        item.split(',').forEach(sub => { if (sub.trim()) set.add(sub.trim()); });
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'th'));
   }, [profile, users]);
 
   const studentUsers = useMemo(() => {

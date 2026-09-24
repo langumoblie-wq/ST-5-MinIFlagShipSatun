@@ -3,34 +3,117 @@
 
 export const GAS_URL: string = "https://script.google.com/macros/s/AKfycbxFPnJm9fQloA3vEbM909DJLelsfN6nWSmJ6cLgEYojFZq-pcwza93rQmca4np7H-NC/exec";
 
-export async function gasRequest(action: string, sheetName: string, data: any = {}) {
+// In-memory cache for GET queries to avoid concurrent execution rate limits on Google Apps Script
+const getCache = new Map<string, { timestamp: number; data: any }>();
+const inFlightRequests = new Map<string, Promise<any>>();
+const CACHE_TTL_MS = 10000; // 10 seconds cache for GET requests
+
+export function invalidateCache(sheetName?: string) {
+  if (sheetName) {
+    getCache.delete(sheetName);
+  } else {
+    getCache.clear();
+  }
+}
+
+export async function gasRequest(action: string, sheetName: string, data: any = {}, retryCount = 2): Promise<any> {
   if (!GAS_URL || GAS_URL === '') {
     throw new Error('Please set GAS_URL in src/lib/gasDb.ts');
   }
-  
-  let response;
-  try {
-    response = await fetch(GAS_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8' // important for avoiding CORS preflight
-      },
-      body: JSON.stringify({ action, sheetName, data })
+
+  // Handle in-flight request deduplication and caching for GET actions
+  if (action === 'GET') {
+    const cached = getCache.get(sheetName);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+      return cached.data;
+    }
+    const inFlight = inFlightRequests.get(sheetName);
+    if (inFlight) {
+      return inFlight;
+    }
+  } else {
+    // Invalidate cache when modifying data
+    invalidateCache(sheetName);
+  }
+
+  const executeRequest = async (): Promise<any> => {
+    let lastError: any = null;
+    for (let attempt = 0; attempt <= retryCount; attempt++) {
+      try {
+        if (attempt > 0) {
+          // Exponential backoff
+          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+        }
+
+        const response = await fetch(GAS_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'text/plain;charset=utf-8' // important for avoiding CORS preflight
+          },
+          body: JSON.stringify({ action, sheetName, data })
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error ${response.status}`);
+        }
+
+        const text = await response.text();
+        
+        // If Google Apps Script returned a plain text fallback like "Mental Care API is running!"
+        // or an HTML error page, retry
+        let result: any;
+        try {
+          result = JSON.parse(text);
+        } catch (jsonErr) {
+          if (attempt < retryCount) {
+            console.warn(`[gasDb] Non-JSON response for ${action} ${sheetName}, retrying (${attempt + 1}/${retryCount})...`);
+            continue;
+          }
+          // If we have stale cache, return it instead of throwing fatal error
+          const stale = getCache.get(sheetName);
+          if (action === 'GET' && stale) {
+            console.warn(`[gasDb] Using stale cache for ${sheetName} due to parse error`);
+            return stale.data;
+          }
+          throw new Error('ไม่สามารถเชื่อมต่อฐานข้อมูล Google Sheet ได้ (โปรดตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือลองใหม่อีกครั้ง)');
+        }
+
+        if (!result.success) {
+          throw new Error(`Google Apps Script Error: ${result.error || 'Unknown Error'}`);
+        }
+
+        if (action === 'GET') {
+          getCache.set(sheetName, { timestamp: Date.now(), data: result.data || [] });
+        }
+
+        return result.data;
+      } catch (err: any) {
+        lastError = err;
+        if (attempt < retryCount) {
+          console.warn(`[gasDb] Request failed (${attempt + 1}/${retryCount}), retrying...`, err.message);
+        }
+      }
+    }
+
+    // If all retries failed but we have stale cache for GET, return it
+    const stale = getCache.get(sheetName);
+    if (action === 'GET' && stale) {
+      console.warn(`[gasDb] Using stale cache for ${sheetName} after all retries failed`);
+      return stale.data;
+    }
+
+    throw lastError || new Error('ไม่สามารถเชื่อมต่อฐานข้อมูล Google Sheet ได้');
+  };
+
+  if (action === 'GET') {
+    const promise = executeRequest().finally(() => {
+      inFlightRequests.delete(sheetName);
     });
-  } catch (e) {
-    throw new Error('ไม่สามารถเชื่อมต่อฐานข้อมูลได้ (โปรดตรวจสอบว่าตั้งค่า Google Apps Script > Who has access: Anyone)');
+    inFlightRequests.set(sheetName, promise);
+    return promise;
   }
-  
-  let result;
-  try {
-    const text = await response.text();
-    result = JSON.parse(text);
-  } catch (e) {
-    throw new Error('ไม่สามารถเชื่อมต่อฐานข้อมูล Google Sheet ได้ (โปรด Deploy สคริปต์ใหม่ แล้วนำ URL มาตั้งค่าใหม่)');
-  }
-  
-  if (!result.success) throw new Error(`Google Apps Script Error: ${result.error || 'Unknown Error'}. โปรดตรวจสอบว่าได้อัปเดตโค้ดใน Apps Script ล่าสุดและ Deploy เป็น New deployment แล้ว`);
-  return result.data;
+
+  return executeRequest();
 }
 
 export const getFirestore = () => ({});
@@ -80,7 +163,7 @@ export const getDoc = async (paths: string[]) => {
   const sheetName = getSheetName(paths);
   const docId = paths[5];
   const rows = await gasRequest('GET', sheetName);
-  const row = rows.find((r: any) => String(r.id) === String(docId));
+  const row = (rows || []).find((r: any) => String(r.id) === String(docId));
   if (row) {
     return { exists: () => true, id: docId, data: () => formatRowOut(row) };
   }
@@ -94,16 +177,6 @@ export const getDocs = async (paths: string[]) => {
   return { docs, forEach: (cb: any) => docs.forEach(cb) };
 };
 
-const formatDateForSheet = (ts: any) => {
-  if (!ts) return '';
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return ts;
-  return d.toLocaleString('th-TH', { 
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit', second: '2-digit'
-  });
-};
-
 const formatRowIn = (data: any) => {
   if (!data) return data;
   return { ...data };
@@ -114,7 +187,7 @@ export const setDoc = async (paths: string[], data: any) => {
   const docId = paths[5];
   
   const rows = await gasRequest('GET', sheetName);
-  const exists = rows.find((r: any) => String(r.id) === String(docId));
+  const exists = (rows || []).find((r: any) => String(r.id) === String(docId));
   
   const payload = { id: docId, ...formatRowIn(data) };
   if (exists) {
