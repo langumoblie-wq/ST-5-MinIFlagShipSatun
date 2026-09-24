@@ -1095,72 +1095,147 @@ function RegisterForm({ onRegisterSuccess }) {
 // ==========================================
 // ST-5 TREND AREA CHART (STUDENT DASHBOARD)
 // ==========================================
-function ST5TrendAreaChart({ history }: { history: any[] }) {
-  // Chronological order (oldest to newest) for trend progression
-  const chartData = useMemo(() => {
-    if (!history || history.length === 0) return [];
-    const sorted = [...history].sort((a: any, b: any) => {
-      const timeA = typeof a.timestamp === 'number' ? a.timestamp : new Date(a.timestamp).getTime() || 0;
-      const timeB = typeof b.timestamp === 'number' ? b.timestamp : new Date(b.timestamp).getTime() || 0;
-      return timeA - timeB;
-    });
+// ==========================================
+// ST-5 TREND CHART (STUDENT & TEACHER UNIFIED VIEW)
+// ==========================================
+function StudentST5TrendChart({ 
+  st5History, 
+  studentName, 
+  isSelfView = false 
+}: { 
+  st5History: any[]; 
+  studentName?: string; 
+  isSelfView?: boolean; 
+}) {
+  const getTs = (ts: any): number => {
+    if (!ts) return 0;
+    if (typeof ts === 'number') return ts;
+    const num = Number(ts);
+    if (!isNaN(num) && num > 100000000000) return num;
+    const d = new Date(ts).getTime();
+    return isNaN(d) ? 0 : d;
+  };
 
+  const trendData = useMemo(() => {
+    if (!st5History || st5History.length === 0) return [];
+    // เรียงตามเวลาจากอดีตไปปัจจุบัน (ครั้งที่ 1 ไปจนถึงครั้งล่าสุด)
+    const sorted = [...st5History].sort((a, b) => getTs(a.timestamp) - getTs(b.timestamp));
     return sorted.map((item, idx) => {
       const score = Number(item.score) || 0;
-      const st5Info = calculateST5(score);
-      const d = item.timestamp ? new Date(typeof item.timestamp === 'number' ? item.timestamp : new Date(item.timestamp).getTime()) : null;
-      const dateStr = d && !isNaN(d.getTime())
-        ? d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })
-        : `ครั้งที่ ${idx + 1}`;
-
+      const status = calculateST5(score);
+      const ms = getTs(item.timestamp);
+      const dateFormatted = ms > 0
+        ? new Date(ms).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })
+        : '';
+      const roundNum = idx + 1;
       return {
-        roundIndex: idx + 1,
-        roundLabel: `ครั้งที่ ${idx + 1}`,
-        dateStr,
-        fullDateStr: d && !isNaN(d.getTime()) ? d.toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' }) : dateStr,
+        roundNum,
+        roundLabel: `ครั้งที่ ${roundNum}`,
+        date: dateFormatted,
+        fullLabel: `ครั้งที่ ${roundNum}${dateFormatted ? ` (${dateFormatted})` : ''}`,
         score,
-        level: item.level || st5Info.level,
-        risk: st5Info.risk,
-        colorBadge: st5Info.badge,
+        level: item.level || status.level,
+        risk: status.risk,
+        color: status.color,
+        badge: status.badge,
+        timestamp: ms,
         suggestion: item.suggestion || ''
       };
     });
-  }, [history]);
+  }, [st5History]);
 
-  // Statistics
-  const latestItem = chartData.length > 0 ? chartData[chartData.length - 1] : null;
-  const previousItem = chartData.length > 1 ? chartData[chartData.length - 2] : null;
-  const avgScore = chartData.length > 0 
-    ? (chartData.reduce((acc, curr) => acc + curr.score, 0) / chartData.length).toFixed(1)
-    : '0';
+  const stats = useMemo(() => {
+    if (trendData.length === 0) return null;
+    const initial = trendData[0];
+    const latest = trendData[trendData.length - 1];
+    const totalRounds = trendData.length;
+    const avgScore = (trendData.reduce((sum, item) => sum + item.score, 0) / totalRounds).toFixed(1);
+    const diff = latest.score - initial.score;
+    const latestStatus = calculateST5(latest.score);
 
-  const scoreDiff = (latestItem && previousItem) ? latestItem.score - previousItem.score : null;
+    const percentChange = initial.score > 0
+      ? ((diff / initial.score) * 100)
+      : (latest.score === 0 ? 0 : ((latest.score / 15) * 100));
+    const percentChangeAbs = Math.abs(percentChange).toFixed(1);
+
+    let analysis = '';
+    if (isSelfView) {
+      if (totalRounds === 1) {
+        analysis = `ยินดีต้อนรับสู่การสำรวจใจตนเอง! คุณประเมินครั้งแรกได้คะแนน ${latest.score}/15 (${latestStatus.level}) เมื่อประเมินในครั้งถัดไป กราฟจะแสดงเส้นแนวโน้มการเปลี่ยนแปลงของสุขภาพใจให้อัตโนมัติค่ะ`;
+      } else if (diff < 0) {
+        analysis = `สุขภาพใจดีขึ้นอย่างเห็นได้ชัด! คะแนนความเครียดลดลง ${Math.abs(diff)} คะแนน (จากครั้งแรก ${initial.score} ➔ ครั้งล่าสุด ${latest.score}) ขอชื่นชมในการดูแลตนเองและปรับสมดุลอารมณ์ได้ยอดเยี่ยมค่ะ ✦`;
+      } else if (diff > 0) {
+        analysis = `คะแนนความเครียดเพิ่มขึ้น ${diff} คะแนน (จากครั้งแรก ${initial.score} ➔ ครั้งล่าสุด ${latest.score}) หากช่วงนี้มีเรื่องกังวลใจ อย่าเก็บไว้คนเดียวนะคะ สามารถพูดคุยปรึกษาคุณครู ผู้ปกครอง หรือสายด่วนสุขภาพจิต 1323 ได้เสมอค่ะ`;
+      } else {
+        analysis = `ระดับความเครียดคงที่อยู่ที่ ${latest.score}/15 (${latestStatus.level}) ตลอดการประเมิน ดูแลและรักษาสมดุลความสุขของตนเองอย่างสม่ำเสมอนะคะ`;
+      }
+    } else {
+      if (totalRounds === 1) {
+        analysis = `ประเมินครั้งแรกได้คะแนน ${latest.score}/15 (${latestStatus.level}) ให้ติดตามประเมินรอบถัดไปเพื่อเริ่มวิเคราะห์แนวโน้ม`;
+      } else if (diff < 0) {
+        analysis = `แนวโน้มดีขึ้น! คะแนนความเครียดลดลง ${Math.abs(diff)} คะแนน (จากครั้งแรก ${initial.score} ➔ ครั้งล่าสุด ${latest.score}) สะท้อนถึงการปรับเปลี่ยนเชิงบวกที่มีประสิทธิผล`;
+      } else if (diff > 0) {
+        analysis = `ควรเฝ้าระวัง: คะแนนความเครียดเพิ่มขึ้น ${diff} คะแนน (จากครั้งแรก ${initial.score} ➔ ครั้งล่าสุด ${latest.score}) แนะนำให้พูดคุยเพิ่มเติมและส่งเสริมกิจกรรมผ่อนคลาย`;
+      } else {
+        analysis = `ระดับความเครียดคงที่อยู่ที่ ${latest.score}/15 (${latestStatus.level}) ตลอดการประเมิน`;
+      }
+    }
+
+    return {
+      initial,
+      latest,
+      totalRounds,
+      avgScore,
+      diff,
+      percentChange,
+      percentChangeAbs,
+      latestStatus,
+      analysis
+    };
+  }, [trendData, isSelfView]);
+
+  if (!st5History || st5History.length === 0) {
+    return (
+      <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100 text-center">
+        <div className="w-16 h-16 bg-purple-50 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-purple-100 text-purple-400">
+          <TrendingUp size={30} />
+        </div>
+        <h3 className="text-lg font-black text-slate-800 mb-1">
+          {isSelfView ? 'ยังไม่มีประวัติการประเมินสุขภาพจิต (ST-5)' : 'ยังไม่มีข้อมูลแนวโน้มสุขภาพจิต (ST-5)'}
+        </h3>
+        <p className="text-sm text-slate-400 font-medium max-w-md mx-auto">
+          {isSelfView 
+            ? 'กดปุ่ม "+ ทำแบบประเมิน ST-5" ด้านบนเพื่อเริ่มบันทึกและดูกราฟพัฒนาการสุขภาพใจของคุณได้เลยค่ะ' 
+            : 'เมื่อนักเรียนได้รับการประเมินสุขภาพจิต ST-5 กราฟเส้น (AreaChart) จะแสดงแนวโน้มคะแนนย้อนหลังและการวิเคราะห์พัฒนาการที่นี่โดยอัตโนมัติ'}
+        </p>
+      </div>
+    );
+  }
 
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
-      const st5Info = calculateST5(data.score);
       return (
-        <div className="bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-slate-200/80 text-xs min-w-[210px] z-50 animate-in fade-in zoom-in-95 duration-150">
-          <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2 mb-2.5">
-            <span className="font-extrabold text-slate-800 text-sm">{data.roundLabel}</span>
-            <span className="text-[11px] text-slate-400 font-medium">{data.dateStr}</span>
+        <div className="bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-purple-100 min-w-[210px] z-50">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2.5">
+            <span className="text-xs font-black text-purple-700">{data.roundLabel}</span>
+            {data.date && <span className="text-[11px] font-semibold text-slate-400">{data.date}</span>}
           </div>
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500 font-medium">คะแนนความเครียด:</span>
-              <span className="text-base font-black text-indigo-600 font-mono">{data.score} <span className="text-xs text-slate-400 font-normal">/ 15</span></span>
+            <div className="flex items-baseline justify-between gap-4">
+              <span className="text-xs text-slate-500 font-medium">คะแนน ST-5:</span>
+              <span className="text-base font-black text-slate-800">{data.score} <span className="text-[11px] text-slate-400 font-normal">/ 15</span></span>
             </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-slate-500 font-medium">ระดับความเครียด:</span>
-              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${st5Info.color}`}>
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-xs text-slate-500 font-medium">ระดับความเครียด:</span>
+              <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shadow-xs ${data.color}`}>
                 {data.level}
               </span>
             </div>
             {data.suggestion && (
-              <div className="mt-2 pt-2 border-t border-slate-100 text-[11px] text-slate-600 bg-slate-50 p-2 rounded-xl">
-                <span className="font-bold text-indigo-600 block mb-0.5">ข้อเสนอแนะความห่วงใย:</span>
-                {data.suggestion}
+              <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-600 line-clamp-2 italic">
+                <span className="font-bold text-purple-600 not-italic block mb-0.5">ข้อเสนอแนะความห่วงใย:</span>
+                "{data.suggestion}"
               </div>
             )}
           </div>
@@ -1171,197 +1246,251 @@ function ST5TrendAreaChart({ history }: { history: any[] }) {
   };
 
   return (
-    <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-100 space-y-6">
+    <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-100 pb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-sky-500 text-white flex items-center justify-center shadow-md shadow-indigo-100 shrink-0">
-            <Activity size={24} />
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100 shadow-sm shrink-0">
+            <TrendingUp size={24} />
           </div>
           <div>
-            <h3 className="text-lg md:text-xl font-extrabold text-slate-800 tracking-tight flex items-center gap-2">
-              กราฟแนวโน้มระดับความเครียด ST-5 (Stress Trend)
+            <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+              {isSelfView 
+                ? 'กราฟแนวโน้มความเครียด (ST-5) ของตนเอง' 
+                : 'แนวโน้มคะแนนสุขภาพจิต ST-5 ย้อนหลัง'}
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              ติดตามระดับคะแนนตามลำดับเวลา และเปรียบเทียบกับเกณฑ์ความเครียด 4 ระดับ (0 - 15 คะแนน)
+            <p className="text-xs text-slate-400 font-medium mt-0.5">
+              {isSelfView 
+                ? 'ติดตามพัฒนาการและทิศทางการเปลี่ยนแปลงคะแนนความเครียดของตนเองตามช่วงเวลา เช่นเดียวกับมุมมองการประเมินของครู (0-15 คะแนน)'
+                : 'กราฟแสดงทิศทางการเปลี่ยนแปลงคะแนนความเครียดตามลำดับการประเมิน (0-15 คะแนน)'}
             </p>
           </div>
         </div>
-
-        {/* Quick Metric Badges */}
-        {latestItem && (
-          <div className="flex flex-wrap items-center gap-2 sm:self-auto self-start">
-            <div className="px-3.5 py-2 rounded-2xl bg-slate-50 border border-slate-200/70">
-              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">ผลประเมินล่าสุด</span>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-base font-black text-slate-800">{latestItem.score}</span>
-                <span className="text-xs text-slate-400">/ 15</span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${calculateST5(latestItem.score).color}`}>
-                  {latestItem.level}
-                </span>
-              </div>
-            </div>
-
-            {scoreDiff !== null && (
-              <div className={`px-3.5 py-2 rounded-2xl border ${
-                scoreDiff < 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
-                scoreDiff > 0 ? 'bg-rose-50 border-rose-200 text-rose-700' :
-                'bg-slate-50 border-slate-200 text-slate-600'
-              }`}>
-                <span className="text-[10px] uppercase font-bold tracking-wider block opacity-80">การเปลี่ยนแปลง</span>
-                <span className="text-xs font-bold flex items-center gap-1 mt-0.5">
-                  {scoreDiff < 0 ? `ลดลง ${Math.abs(scoreDiff)} คะแนน ✦` :
-                   scoreDiff > 0 ? `เพิ่มขึ้น ${scoreDiff} คะแนน` :
-                   'คะแนนเท่าเดิม'}
-                </span>
-              </div>
-            )}
+        {stats && (
+          <div className="flex items-center gap-2 self-start sm:self-center">
+            <span className={`px-4 py-1.5 rounded-full text-xs font-bold border shadow-sm ${stats.latestStatus.color}`}>
+              สถานะล่าสุด: {stats.latestStatus.level} ({stats.latest.score}/15)
+            </span>
           </div>
         )}
       </div>
 
-      {/* Threshold Reference Indicator Legend */}
-      <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-200/60">
-        <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2.5 flex items-center justify-between">
-          <span>เกณฑ์ระดับความเครียดมาตรฐาน (กรมสุขภาพจิต):</span>
-          <span className="text-[10px] font-medium text-slate-400">คะแนนเต็ม 15 คะแนน</span>
+      {/* Quick Summary Metric Cards */}
+      {stats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
+            <span className="text-[11px] font-bold text-slate-400 block mb-1">จำนวนครั้งประเมิน</span>
+            <span className="text-xl font-black text-slate-800">{stats.totalRounds} <span className="text-xs font-normal text-slate-400">ครั้ง</span></span>
+          </div>
+          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
+            <span className="text-[11px] font-bold text-slate-400 block mb-1">คะแนนครั้งแรก</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-xl font-black text-slate-700">{stats.initial.score}</span>
+              <span className="text-[11px] text-slate-400 font-medium">/ 15</span>
+            </div>
+          </div>
+          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
+            <span className="text-[11px] font-bold text-slate-400 block mb-1">คะแนนเฉลี่ย</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-xl font-black text-purple-600">{stats.avgScore}</span>
+              <span className="text-[11px] text-slate-400 font-medium">/ 15</span>
+            </div>
+          </div>
+          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
+            <span className="text-[11px] font-bold text-slate-400 block mb-1">การเปลี่ยนแปลง</span>
+            {stats.totalRounds > 1 ? (
+              stats.diff < 0 ? (
+                <div>
+                  <span className="text-sm font-black text-teal-600 flex items-center gap-1">
+                    <TrendingDown size={18} /> ลดลง {Math.abs(stats.diff)} คะแนน
+                  </span>
+                  <span className="text-[11px] font-bold text-teal-600 block mt-0.5">
+                    (-{stats.percentChangeAbs}%)
+                  </span>
+                </div>
+              ) : stats.diff > 0 ? (
+                <div>
+                  <span className="text-sm font-black text-rose-500 flex items-center gap-1">
+                    <TrendingUp size={18} /> เพิ่ม {stats.diff} คะแนน
+                  </span>
+                  <span className="text-[11px] font-bold text-rose-500 block mt-0.5">
+                    (+{stats.percentChangeAbs}%)
+                  </span>
+                </div>
+              ) : (
+                <div>
+                  <span className="text-sm font-black text-slate-500 flex items-center gap-1">
+                    <Minus size={18} /> คงที่ (0)
+                  </span>
+                  <span className="text-[11px] font-bold text-slate-400 block mt-0.5">
+                    (0.0%)
+                  </span>
+                </div>
+              )
+            ) : (
+              <span className="text-xs font-bold text-slate-400">ประเมินครั้งแรก</span>
+            )}
+          </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-          <div className="flex items-center gap-2.5 bg-white px-3 py-2.5 rounded-xl border border-teal-200/80 shadow-2xs">
-            <span className="w-3.5 h-3.5 rounded-full bg-teal-500 shrink-0 ring-4 ring-teal-50" />
-            <div className="truncate">
-              <span className="text-xs font-bold text-teal-800 block leading-tight">0 - 4 คะแนน</span>
-              <span className="text-[10px] text-teal-600 font-medium">เครียดน้อย (ปกติ)</span>
-            </div>
+      )}
+
+      {/* AreaChart Container */}
+      <div className="w-full bg-slate-50/50 p-4 md:p-6 rounded-3xl border border-slate-100">
+        <div className="h-64 sm:h-72 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={trendData} margin={{ top: 15, right: 15, left: -15, bottom: 5 }}>
+              <defs>
+                <linearGradient id="st5UnifiedStudentGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+
+              {/* Shaded Threshold Zones */}
+              <ReferenceArea {...({ y1: 0, y2: 4, fill: '#10b981', fillOpacity: 0.05 } as any)} />
+              <ReferenceArea {...({ y1: 4, y2: 7, fill: '#f59e0b', fillOpacity: 0.05 } as any)} />
+              <ReferenceArea {...({ y1: 7, y2: 9, fill: '#f97316', fillOpacity: 0.06 } as any)} />
+              <ReferenceArea {...({ y1: 9, y2: 15, fill: '#ef4444', fillOpacity: 0.07 } as any)} />
+
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis 
+                dataKey="roundLabel" 
+                tickLine={false} 
+                axisLine={{ stroke: '#cbd5e1' }}
+                tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }}
+              />
+              <YAxis 
+                domain={[0, 15]} 
+                ticks={[0, 4, 7, 9, 15]} 
+                tickLine={false} 
+                axisLine={{ stroke: '#cbd5e1' }}
+                tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }}
+              />
+              <Tooltip content={(props: any) => <CustomTooltip {...props} />} />
+              <ReferenceLine y={4} stroke="#14b8a6" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: 'เครียดน้อย (≤4)', position: 'insideTopRight', fill: '#0d9488', fontSize: 10, fontWeight: 700 }} />
+              <ReferenceLine y={7} stroke="#f59e0b" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: 'เครียดปานกลาง (≤7)', position: 'insideTopRight', fill: '#d97706', fontSize: 10, fontWeight: 700 }} />
+              <ReferenceLine y={9} stroke="#f43f5e" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: 'เครียดมาก (≤9)', position: 'insideTopRight', fill: '#e11d48', fontSize: 10, fontWeight: 700 }} />
+              <Area 
+                type="monotone" 
+                dataKey="score" 
+                stroke="#8b5cf6" 
+                strokeWidth={3} 
+                fill="url(#st5UnifiedStudentGradient)" 
+                activeDot={{ r: 6, fill: '#8b5cf6', stroke: '#ffffff', strokeWidth: 3 }}
+                dot={{ r: 4, fill: '#8b5cf6', stroke: '#ffffff', strokeWidth: 2 }}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Legend for ST-5 Thresholds */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-200/60 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-slate-400 font-bold text-[11px]">เกณฑ์ระดับคะแนน ST-5:</span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 text-teal-700 text-[11px] font-bold border border-teal-200">
+              <span className="w-2 h-2 rounded-full bg-teal-500"></span> 0-4 เครียดน้อย (ปกติ)
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 text-[11px] font-bold border border-amber-200">
+              <span className="w-2 h-2 rounded-full bg-amber-400"></span> 5-7 เครียดปานกลาง
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 text-[11px] font-bold border border-rose-200">
+              <span className="w-2 h-2 rounded-full bg-rose-400"></span> 8-9 เครียดมาก
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-50 text-red-700 text-[11px] font-bold border border-red-200">
+              <span className="w-2 h-2 rounded-full bg-red-500"></span> 10-15 เครียดมากที่สุด
+            </span>
           </div>
-          <div className="flex items-center gap-2.5 bg-white px-3 py-2.5 rounded-xl border border-amber-200/80 shadow-2xs">
-            <span className="w-3.5 h-3.5 rounded-full bg-amber-400 shrink-0 ring-4 ring-amber-50" />
-            <div className="truncate">
-              <span className="text-xs font-bold text-amber-800 block leading-tight">5 - 7 คะแนน</span>
-              <span className="text-[10px] text-amber-600 font-medium">เครียดปานกลาง</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5 bg-white px-3 py-2.5 rounded-xl border border-orange-200/80 shadow-2xs">
-            <span className="w-3.5 h-3.5 rounded-full bg-orange-500 shrink-0 ring-4 ring-orange-50" />
-            <div className="truncate">
-              <span className="text-xs font-bold text-orange-800 block leading-tight">8 - 9 คะแนน</span>
-              <span className="text-[10px] text-orange-600 font-medium">เครียดมาก</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5 bg-white px-3 py-2.5 rounded-xl border border-rose-200/80 shadow-2xs">
-            <span className="w-3.5 h-3.5 rounded-full bg-rose-500 shrink-0 ring-4 ring-rose-50" />
-            <div className="truncate">
-              <span className="text-xs font-bold text-rose-800 block leading-tight">10 - 15 คะแนน</span>
-              <span className="text-[10px] text-rose-600 font-medium">เครียดมากที่สุด</span>
-            </div>
-          </div>
+          {stats.totalRounds === 1 && (
+            <span className="text-[11px] text-purple-600 font-semibold italic">
+              * ประเมินครั้งถัดไปเพื่อแสดงกราฟเปรียบเทียบแนวโน้ม
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Chart Canvas Area */}
-      {chartData.length === 0 ? (
-        <div className="text-center py-12 bg-slate-50/50 rounded-3xl border-2 border-dashed border-slate-200">
-          <Smile className="mx-auto text-slate-300 mb-2" size={48} strokeWidth={1.5} />
-          <p className="text-slate-600 font-bold text-sm">ยังไม่มีประวัติการประเมิน ST-5</p>
-          <p className="text-slate-400 text-xs mt-1">กดปุ่ม "+ ทำแบบประเมิน ST-5" ด้านบนเพื่อเริ่มบันทึกและดูกราฟพัฒนาการสุขภาพใจของคุณ</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="w-full h-80 pt-2 pb-1">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 15, right: 25, left: -5, bottom: 5 }}>
-                <defs>
-                  {/* Score Area Gradient */}
-                  <linearGradient id="st5ScoreGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4} />
-                    <stop offset="50%" stopColor="#818cf8" stopOpacity={0.15} />
-                    <stop offset="95%" stopColor="#38bdf8" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
+      {/* Percentage Change Summary Card (Beneath Chart) */}
+      {stats && (
+        <div className={`p-4 md:p-5 rounded-2xl border transition-all ${
+          stats.totalRounds === 1 
+            ? 'bg-slate-50/80 border-slate-200/80 text-slate-700'
+            : stats.diff < 0 
+              ? 'bg-gradient-to-r from-emerald-50/90 via-teal-50/50 to-white border-emerald-200 text-emerald-950 shadow-xs'
+              : stats.diff > 0 
+                ? 'bg-gradient-to-r from-rose-50/90 via-orange-50/50 to-white border-rose-200 text-rose-950 shadow-xs'
+                : 'bg-slate-50/90 border-slate-200 text-slate-800'
+        }`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-2xs ${
+                stats.totalRounds === 1 
+                  ? 'bg-purple-100 text-purple-600'
+                  : stats.diff < 0 
+                    ? 'bg-emerald-100 text-emerald-600' 
+                    : stats.diff > 0 
+                      ? 'bg-rose-100 text-rose-600' 
+                      : 'bg-slate-200 text-slate-600'
+              }`}>
+                {stats.totalRounds === 1 ? <Target size={22} /> :
+                 stats.diff < 0 ? <TrendingDown size={22} /> :
+                 stats.diff > 0 ? <TrendingUp size={22} /> :
+                 <Minus size={22} />}
+              </div>
+              <div>
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 block">
+                  อัตราการเปลี่ยนแปลงคะแนนความเครียด (Percentage Change)
+                </span>
+                <p className="text-xs md:text-sm font-bold text-slate-800 mt-0.5">
+                  {stats.totalRounds === 1 ? (
+                    <span>บันทึกคะแนนรอบแรกเป็นฐานข้อมูลเริ่มต้น: <strong>{stats.initial.score} / 15 คะแนน</strong></span>
+                  ) : (
+                    <span>
+                      จากครั้งแรก <strong>{stats.initial.score} คะแนน</strong> {stats.initial.date ? `(${stats.initial.date})` : ''} ➔ ครั้งล่าสุด <strong>{stats.latest.score} คะแนน</strong> {stats.latest.date ? `(${stats.latest.date})` : ''}
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
 
-                {/* Shaded Threshold Zones */}
-                <ReferenceArea {...({ y1: 0, y2: 4, fill: '#10b981', fillOpacity: 0.06 } as any)} />
-                <ReferenceArea {...({ y1: 4, y2: 7, fill: '#f59e0b', fillOpacity: 0.06 } as any)} />
-                <ReferenceArea {...({ y1: 7, y2: 9, fill: '#f97316', fillOpacity: 0.07 } as any)} />
-                <ReferenceArea {...({ y1: 9, y2: 15, fill: '#ef4444', fillOpacity: 0.08 } as any)} />
-
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-
-                <XAxis 
-                  dataKey="roundLabel" 
-                  tickLine={false} 
-                  stroke="#94a3b8" 
-                  fontSize={12}
-                  tickMargin={8}
-                />
-                <YAxis 
-                  domain={[0, 15]} 
-                  ticks={[0, 4, 7, 9, 15]} 
-                  tickLine={false} 
-                  stroke="#94a3b8" 
-                  fontSize={11}
-                  width={35}
-                />
-
-                {/* Threshold Reference Lines */}
-                <ReferenceLine 
-                  y={4} 
-                  stroke="#10b981" 
-                  strokeDasharray="4 4" 
-                  strokeWidth={1.5}
-                  label={{ value: 'เครียดน้อย (≤4)', position: 'insideTopRight', fill: '#059669', fontSize: 10, fontWeight: 700 }}
-                />
-                <ReferenceLine 
-                  y={7} 
-                  stroke="#f59e0b" 
-                  strokeDasharray="4 4" 
-                  strokeWidth={1.5}
-                  label={{ value: 'เครียดปานกลาง (≤7)', position: 'insideTopRight', fill: '#d97706', fontSize: 10, fontWeight: 700 }}
-                />
-                <ReferenceLine 
-                  y={9} 
-                  stroke="#f97316" 
-                  strokeDasharray="4 4" 
-                  strokeWidth={1.5}
-                  label={{ value: 'เครียดมาก (≤9)', position: 'insideTopRight', fill: '#ea580c', fontSize: 10, fontWeight: 700 }}
-                />
-
-                <Tooltip content={<CustomTooltip />} />
-
-                <Area 
-                  type="monotone" 
-                  dataKey="score" 
-                  stroke="#6366f1" 
-                  strokeWidth={3} 
-                  fillOpacity={1} 
-                  fill="url(#st5ScoreGradient)"
-                  dot={{ r: 5, fill: '#6366f1', stroke: '#ffffff', strokeWidth: 2 }}
-                  activeDot={{ r: 7, fill: '#4f46e5', stroke: '#ffffff', strokeWidth: 3 }}
-                  animationDuration={800}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            {/* Percentage Highlight Badge */}
+            <div className="self-start sm:self-center shrink-0">
+              {stats.totalRounds > 1 ? (
+                <div className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-black text-sm border shadow-2xs ${
+                  stats.diff < 0 
+                    ? 'bg-emerald-500 text-white border-emerald-600 shadow-emerald-100'
+                    : stats.diff > 0 
+                      ? 'bg-rose-500 text-white border-rose-600 shadow-rose-100' 
+                      : 'bg-slate-200 text-slate-700 border-slate-300'
+                }`}>
+                  {stats.diff < 0 ? <TrendingDown size={16} /> :
+                   stats.diff > 0 ? <TrendingUp size={16} /> :
+                   <Minus size={16} />}
+                  <span>
+                    {stats.diff < 0 ? `ลดลง ${stats.percentChangeAbs}%` :
+                     stats.diff > 0 ? `เพิ่มขึ้น ${stats.percentChangeAbs}%` :
+                     'คงที่ 0.0%'}
+                  </span>
+                </div>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-xl text-xs font-bold bg-white text-purple-700 border border-purple-200">
+                  รอบฐานข้อมูล (Baseline)
+                </span>
+              )}
+            </div>
           </div>
+        </div>
+      )}
 
-          {/* Subtitle / summary info under chart */}
-          <div className="flex flex-wrap items-center justify-between text-xs text-slate-500 pt-3 border-t border-slate-100 gap-2">
-            <span className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-indigo-500" />
-              <span>ประเมินทั้งหมด <strong className="text-slate-700 font-bold">{chartData.length} ครั้ง</strong></span>
-              <span className="text-slate-300">•</span>
-              <span>คะแนนเฉลี่ย <strong className="text-slate-700 font-bold">{avgScore} / 15</strong></span>
+      {/* Analysis Insight Box */}
+      {stats && (
+        <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-start gap-3">
+          <Sparkles size={18} className="text-purple-600 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <span className="text-[11px] font-black text-purple-800 uppercase tracking-wider block">
+              บทวิเคราะห์แนวโน้มสุขภาพจิต
             </span>
-
-            {chartData.length === 1 && (
-              <span className="text-sky-600 bg-sky-50 px-3 py-1 rounded-xl font-medium text-[11px] border border-sky-100">
-                ✦ บันทึกครั้งแรกเรียบร้อย! เมื่อทำแบบประเมินในครั้งต่อไป กราฟจะวาดเส้นแนวโน้มการเปลี่ยนแปลงให้อัตโนมัติ
-              </span>
-            )}
-            {chartData.length >= 2 && latestItem && latestItem.score <= 4 && (
-              <span className="text-teal-700 bg-teal-50 px-3 py-1 rounded-xl font-medium text-[11px] border border-teal-100">
-                ✨ ยอดเยี่ยมมาก! ระดับความเครียดอยู่ในเกณฑ์ปกติ รักษาสุขภาพใจให้สดชื่นต่อไปนะคะ
-              </span>
-            )}
+            <p className="text-xs font-semibold text-purple-900 leading-relaxed">
+              {stats.analysis}
+            </p>
           </div>
         </div>
       )}
@@ -1379,17 +1508,34 @@ function UserDashboard({ users, profile, st5Data, behaviorData, triggerAlert, tr
   const [st5Result, setSt5Result] = useState(null);
   const [editingST5, setEditingST5] = useState(null); 
   const myHistory = useMemo(() => {
+    const parseTs = (ts: any): number => {
+      if (!ts) return 0;
+      if (typeof ts === 'number') return ts;
+      const n = Number(ts);
+      if (!isNaN(n) && n > 100000000000) return n;
+      const parsed = new Date(ts).getTime();
+      return isNaN(parsed) ? 0 : parsed;
+    };
+
     return (st5Data || [])
-      .filter((d: any) => 
-        (profile?.id && (d.uid === profile.id || d.userId === profile.id)) ||
-        (profile?.username && (d.uid === profile.username || d.username === profile.username)) ||
-        (profile?.name && (d.userName === profile.name || d.name === profile.name))
-      )
-      .sort((a: any, b: any) => {
-        const timeA = typeof a.timestamp === 'number' ? a.timestamp : new Date(a.timestamp).getTime() || 0;
-        const timeB = typeof b.timestamp === 'number' ? b.timestamp : new Date(b.timestamp).getTime() || 0;
-        return timeB - timeA;
-      });
+      .filter((d: any) => {
+        const pId = String(profile?.id || '').trim().toLowerCase();
+        const pUsername = String(profile?.username || '').trim().toLowerCase();
+        const pName = String(profile?.name || '').trim().toLowerCase();
+        
+        const dUid = String(d.uid || '').trim().toLowerCase();
+        const dUserId = String(d.userId || '').trim().toLowerCase();
+        const dUsername = String(d.username || '').trim().toLowerCase();
+        const dUserName = String(d.userName || '').trim().toLowerCase();
+        const dName = String(d.name || '').trim().toLowerCase();
+
+        return (
+          (pId && (dUid === pId || dUserId === pId)) ||
+          (pUsername && (dUid === pUsername || dUsername === pUsername || dUserId === pUsername)) ||
+          (pName && (dUserName === pName || dName === pName))
+        );
+      })
+      .sort((a: any, b: any) => parseTs(b.timestamp) - parseTs(a.timestamp));
   }, [st5Data, profile]);
 
   const handleSubmitST5 = async (answers, score) => {
@@ -1461,7 +1607,7 @@ function UserDashboard({ users, profile, st5Data, behaviorData, triggerAlert, tr
       {!showST5 && !st5Result && (
         <>
           {/* ST-5 Stress Trend AreaChart */}
-          <ST5TrendAreaChart history={myHistory} />
+          <StudentST5TrendChart st5History={myHistory} studentName={profile?.name} isSelfView={true} />
 
           <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-100">
             <h3 className="text-lg font-bold flex items-center gap-2 text-slate-700 mb-6"><FileText className="text-sky-400"/> ประวัติการประเมินของคุณ</h3>
@@ -2929,264 +3075,6 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function StudentST5TrendChart({ st5History, studentName }) {
-  const trendData = useMemo(() => {
-    if (!st5History || st5History.length === 0) return [];
-    // เรียงตามเวลาจากอดีตไปปัจจุบัน (ครั้งที่ 1 ไปจนถึงครั้งล่าสุด)
-    const sorted = [...st5History].sort((a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0));
-    return sorted.map((item, idx) => {
-      const score = Number(item.score) || 0;
-      const status = calculateST5(score);
-      const dateFormatted = item.timestamp 
-        ? new Date(item.timestamp).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })
-        : '';
-      const roundNum = idx + 1;
-      return {
-        roundNum,
-        roundLabel: `ครั้งที่ ${roundNum}`,
-        date: dateFormatted,
-        fullLabel: `ครั้งที่ ${roundNum}${dateFormatted ? ` (${dateFormatted})` : ''}`,
-        score,
-        level: item.level || status.level,
-        risk: status.risk,
-        color: status.color,
-        badge: status.badge,
-        timestamp: item.timestamp,
-        suggestion: item.suggestion || ''
-      };
-    });
-  }, [st5History]);
-
-  const stats = useMemo(() => {
-    if (trendData.length === 0) return null;
-    const initial = trendData[0];
-    const latest = trendData[trendData.length - 1];
-    const totalRounds = trendData.length;
-    const avgScore = (trendData.reduce((sum, item) => sum + item.score, 0) / totalRounds).toFixed(1);
-    const diff = latest.score - initial.score;
-    const latestStatus = calculateST5(latest.score);
-
-    let analysis = '';
-    if (totalRounds === 1) {
-      analysis = `ประเมินครั้งแรกได้คะแนน ${latest.score}/15 (${latestStatus.level}) ให้ติดตามประเมินรอบถัดไปเพื่อเริ่มวิเคราะห์แนวโน้ม`;
-    } else if (diff < 0) {
-      analysis = `แนวโน้มดีขึ้น! คะแนนความเครียดลดลง ${Math.abs(diff)} คะแนน (จากครั้งแรก ${initial.score} ➔ ครั้งล่าสุด ${latest.score}) สะท้อนถึงการปรับเปลี่ยนเชิงบวกที่มีประสิทธิผล`;
-    } else if (diff > 0) {
-      analysis = `ควรเฝ้าระวัง: คะแนนความเครียดเพิ่มขึ้น ${diff} คะแนน (จากครั้งแรก ${initial.score} ➔ ครั้งล่าสุด ${latest.score}) แนะนำให้พูดคุยเพิ่มเติมและส่งเสริมกิจกรรมผ่อนคลาย`;
-    } else {
-      analysis = `ระดับความเครียดคงที่อยู่ที่ ${latest.score}/15 (${latestStatus.level}) ตลอดการประเมิน`;
-    }
-
-    return {
-      initial,
-      latest,
-      totalRounds,
-      avgScore,
-      diff,
-      latestStatus,
-      analysis
-    };
-  }, [trendData]);
-
-  if (!st5History || st5History.length === 0) {
-    return (
-      <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100 text-center">
-        <div className="w-16 h-16 bg-purple-50 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-purple-100 text-purple-400">
-          <TrendingUp size={30} />
-        </div>
-        <h3 className="text-lg font-black text-slate-800 mb-1">ยังไม่มีข้อมูลแนวโน้มสุขภาพจิต (ST-5)</h3>
-        <p className="text-sm text-slate-400 font-medium max-w-md mx-auto">
-          เมื่อนักเรียนได้รับการประเมินสุขภาพจิต ST-5 กราฟเส้น (AreaChart) จะแสดงแนวโน้มคะแนนย้อนหลังและการวิเคราะห์พัฒนาการที่นี่โดยอัตโนมัติ
-        </p>
-      </div>
-    );
-  }
-
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div className="bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-purple-100 min-w-[210px] z-50">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2.5">
-            <span className="text-xs font-black text-purple-700">{data.roundLabel}</span>
-            {data.date && <span className="text-[11px] font-semibold text-slate-400">{data.date}</span>}
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-baseline justify-between gap-4">
-              <span className="text-xs text-slate-500 font-medium">คะแนน ST-5:</span>
-              <span className="text-base font-black text-slate-800">{data.score} <span className="text-[11px] text-slate-400 font-normal">/ 15</span></span>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-xs text-slate-500 font-medium">ระดับความเครียด:</span>
-              <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shadow-xs ${data.color}`}>
-                {data.level}
-              </span>
-            </div>
-            {data.suggestion && (
-              <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-600 line-clamp-2 italic">
-                "{data.suggestion}"
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
-
-  return (
-    <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100 shadow-sm shrink-0">
-            <TrendingUp size={24} />
-          </div>
-          <div>
-            <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-              แนวโน้มคะแนนสุขภาพจิต ST-5 ย้อนหลัง
-            </h3>
-            <p className="text-xs text-slate-400 font-medium mt-0.5">
-              กราฟแสดงทิศทางการเปลี่ยนแปลงคะแนนความเครียดตามลำดับการประเมิน (0-15 คะแนน)
-            </p>
-          </div>
-        </div>
-        {stats && (
-          <div className="flex items-center gap-2 self-start sm:self-center">
-            <span className={`px-4 py-1.5 rounded-full text-xs font-bold border shadow-sm ${stats.latestStatus.color}`}>
-              สถานะล่าสุด: {stats.latestStatus.level} ({stats.latest.score}/15)
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Quick Summary Metric Cards */}
-      {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
-            <span className="text-[11px] font-bold text-slate-400 block mb-1">จำนวนครั้งประเมิน</span>
-            <span className="text-xl font-black text-slate-800">{stats.totalRounds} <span className="text-xs font-normal text-slate-400">ครั้ง</span></span>
-          </div>
-          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
-            <span className="text-[11px] font-bold text-slate-400 block mb-1">คะแนนครั้งแรก</span>
-            <div className="flex items-baseline gap-1">
-              <span className="text-xl font-black text-slate-700">{stats.initial.score}</span>
-              <span className="text-[11px] text-slate-400 font-medium">/ 15</span>
-            </div>
-          </div>
-          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
-            <span className="text-[11px] font-bold text-slate-400 block mb-1">คะแนนเฉลี่ย</span>
-            <div className="flex items-baseline gap-1">
-              <span className="text-xl font-black text-purple-600">{stats.avgScore}</span>
-              <span className="text-[11px] text-slate-400 font-medium">/ 15</span>
-            </div>
-          </div>
-          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
-            <span className="text-[11px] font-bold text-slate-400 block mb-1">การเปลี่ยนแปลง</span>
-            {stats.totalRounds > 1 ? (
-              stats.diff < 0 ? (
-                <span className="text-sm font-black text-teal-600 flex items-center gap-1">
-                  <TrendingDown size={18} /> ลดลง {Math.abs(stats.diff)}
-                </span>
-              ) : stats.diff > 0 ? (
-                <span className="text-sm font-black text-rose-500 flex items-center gap-1">
-                  <TrendingUp size={18} /> เพิ่ม {stats.diff}
-                </span>
-              ) : (
-                <span className="text-sm font-black text-slate-500 flex items-center gap-1">
-                  <Minus size={18} /> คงที่ (0)
-                </span>
-              )
-            ) : (
-              <span className="text-xs font-bold text-slate-400">ประเมินครั้งแรก</span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* AreaChart Container */}
-      <div className="w-full bg-slate-50/50 p-4 md:p-6 rounded-3xl border border-slate-100">
-        <div className="h-64 sm:h-72 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={trendData} margin={{ top: 15, right: 15, left: -15, bottom: 5 }}>
-              <defs>
-                <linearGradient id="st5StudentGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-              <XAxis 
-                dataKey="roundLabel" 
-                tickLine={false} 
-                axisLine={{ stroke: '#cbd5e1' }}
-                tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }}
-              />
-              <YAxis 
-                domain={[0, 15]} 
-                ticks={[0, 4, 7, 9, 15]} 
-                tickLine={false} 
-                axisLine={{ stroke: '#cbd5e1' }}
-                tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }}
-              />
-              <Tooltip content={(props: any) => <CustomTooltip {...props} />} />
-              <ReferenceLine y={4} stroke="#14b8a6" strokeDasharray="4 4" strokeWidth={1.5} />
-              <ReferenceLine y={7} stroke="#f59e0b" strokeDasharray="4 4" strokeWidth={1.5} />
-              <ReferenceLine y={9} stroke="#f43f5e" strokeDasharray="4 4" strokeWidth={1.5} />
-              <Area 
-                type="monotone" 
-                dataKey="score" 
-                stroke="#8b5cf6" 
-                strokeWidth={3} 
-                fill="url(#st5StudentGradient)" 
-                activeDot={{ r: 6, fill: '#8b5cf6', stroke: '#ffffff', strokeWidth: 3 }}
-                dot={{ r: 4, fill: '#8b5cf6', stroke: '#ffffff', strokeWidth: 2 }}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Legend for ST-5 Thresholds */}
-        <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-200/60 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-slate-400 font-bold text-[11px]">เกณฑ์ระดับคะแนน ST-5:</span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 text-teal-700 text-[11px] font-bold border border-teal-200">
-              <span className="w-2 h-2 rounded-full bg-teal-500"></span> 0-4 เครียดน้อย (ปกติ)
-            </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 text-[11px] font-bold border border-amber-200">
-              <span className="w-2 h-2 rounded-full bg-amber-400"></span> 5-7 เครียดปานกลาง
-            </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 text-[11px] font-bold border border-rose-200">
-              <span className="w-2 h-2 rounded-full bg-rose-400"></span> 8-9 เครียดมาก
-            </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-50 text-red-700 text-[11px] font-bold border border-red-200">
-              <span className="w-2 h-2 rounded-full bg-red-500"></span> 10-15 เครียดมากที่สุด
-            </span>
-          </div>
-          {stats.totalRounds === 1 && (
-            <span className="text-[11px] text-purple-600 font-semibold italic">
-              * ประเมินครั้งถัดไปเพื่อแสดงกราฟเปรียบเทียบแนวโน้ม
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Analysis Insight Box */}
-      {stats && (
-        <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-start gap-3">
-          <Sparkles size={18} className="text-purple-600 shrink-0 mt-0.5" />
-          <div className="space-y-0.5">
-            <span className="text-[11px] font-black text-purple-800 uppercase tracking-wider block">บทวิเคราะห์แนวโน้มสุขภาพจิต</span>
-            <p className="text-xs font-semibold text-purple-900 leading-relaxed">
-              {stats.analysis}
-            </p>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
