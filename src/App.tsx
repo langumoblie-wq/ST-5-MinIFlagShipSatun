@@ -491,6 +491,17 @@ export default function App() {
             )}
             
             {profile.role === 'superadmin' && profile.status === 'approved' && (
+               <>
+               <button 
+                  onClick={() => setActiveTab('behavior_report')}
+                  className={`px-5 py-3.5 rounded-2xl flex items-center gap-3 transition-all font-medium text-sm md:text-base ${
+                    activeTab === 'behavior_report' 
+                      ? 'bg-emerald-500 text-white shadow-md shadow-emerald-200' 
+                      : 'bg-white text-slate-500 hover:bg-emerald-50 hover:text-emerald-600 border border-slate-100'
+                  }`}
+               >
+                 <ClipboardList size={20} /> <span>รายงานพฤติกรรม (บวก/ลบ)</span>
+               </button>
                <button 
                   onClick={() => setActiveTab('executive_report')}
                   className={`px-5 py-3.5 rounded-2xl flex items-center gap-3 transition-all font-medium text-sm md:text-base ${
@@ -501,6 +512,7 @@ export default function App() {
                >
                  <BarChart3 size={20} /> <span>รายงานสำหรับผู้บริหาร</span>
                </button>
+               </>
             )}
 
             {/* เมนู Sync (เฉพาะ Superadmin และ Username: rung เท่านั้น) */}
@@ -554,6 +566,9 @@ export default function App() {
             {activeTab === 'dashboard' && profile.role === 'user' && <UserDashboard users={usersList} profile={profile} st5Data={st5Data} behaviorData={behaviorData} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
             {activeTab === 'dashboard' && profile.role === 'admin' && <AdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} triggerDownloadConsentPdf={triggerDownloadConsentPdf} />}
             {activeTab === 'dashboard' && profile.role === 'superadmin' && <SuperAdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} triggerDownloadConsentPdf={triggerDownloadConsentPdf} />}
+            {activeTab === 'behavior_report' && profile.role === 'superadmin' && (
+              <SuperAdminBehaviorReportDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />
+            )}
             {activeTab === 'analytics' && (profile.role === 'admin' || profile.role === 'superadmin') && (
               <ExecutiveAnalyticsDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} />
             )}
@@ -4337,12 +4352,1631 @@ function ImportDashboard({ triggerAlert, triggerConfirm, profile }) {
   );
 }
 
+// ==========================================
+// 📊 SUPERADMIN BEHAVIOR REPORT DASHBOARD (รายงานรายละเอียดข้อมูลการประเมินพฤติกรรม เชิงบวก - เชิงลบ)
+// ==========================================
+function SuperAdminBehaviorReportDashboard({ users, st5Data, behaviorData, profile, triggerAlert, triggerConfirm }) {
+  const [subView, setSubView] = useState<'records' | 'students' | 'categories' | 'affiliations'>('records');
+  const [selectedAffiliation, setSelectedAffiliation] = useState<string>('all');
+  const [selectedModel, setSelectedModel] = useState<string>('all');
+  const [selectedDistrict, setSelectedDistrict] = useState<string>('all');
+  const [behaviorTypeFilter, setBehaviorTypeFilter] = useState<string>('all'); // 'all', 'has_positive', 'has_negative', 'positive_only', 'negative_dominant', 'both'
+  const [specificItemFilter, setSpecificItemFilter] = useState<string>('all');
+  const [roundFilter, setRoundFilter] = useState<string>('all'); // 'all', 'latest', '1', '2', '3+'
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(25);
+
+  // Modal สำหรับเจาะลึกรายละเอียดรายบุคคล / รายครั้ง
+  const [inspectingStudentId, setInspectingStudentId] = useState<string | null>(null);
+  const [inspectingRecordId, setInspectingRecordId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [subView, selectedAffiliation, selectedModel, selectedDistrict, behaviorTypeFilter, specificItemFilter, roundFilter, searchQuery, pageSize]);
+
+  const getSafeTimestamp = (t: any): number => {
+    if (!t) return 0;
+    if (typeof t === 'number') return t;
+    if (t?.toMillis && typeof t.toMillis === 'function') return t.toMillis();
+    if (t?.seconds) return t.seconds * 1000;
+    const d = new Date(t).getTime();
+    return isNaN(d) ? 0 : d;
+  };
+
+  const matchAffiliation = (studentAff: any, targetAff?: any) => {
+    if (!targetAff || targetAff === 'all') return true;
+    if (!studentAff) return false;
+    const targetStr = (Array.isArray(targetAff) ? targetAff.join(',') : String(targetAff || '')).trim().toLowerCase();
+    if (!targetStr || targetStr === 'all') return true;
+    const studentList: string[] = Array.isArray(studentAff)
+      ? studentAff.map(a => String(a || '').trim().toLowerCase())
+      : String(studentAff || '').split(',').map(a => a.trim().toLowerCase());
+    const targetList: string[] = targetStr.split(',').map(a => a.trim()).filter(Boolean);
+    return studentList.some(s => targetList.some(t => s === t || s.includes(t) || t.includes(s)));
+  };
+
+  // สกัดรายการพฤติกรรมเชิงบวกและเชิงลบอย่างปลอดภัย รองรับทั้ง object selections และ string
+  const extractSelections = (beh: any): { desirable: string[]; undesirable: string[] } => {
+    let des: string[] = [];
+    let und: string[] = [];
+
+    if (Array.isArray(beh?.selections?.desirable)) {
+      des = beh.selections.desirable.filter(Boolean);
+    } else if (typeof beh?.desirable === 'string' && beh.desirable.trim()) {
+      des = beh.desirable.split(',').map((s: string) => s.trim()).filter(Boolean);
+    }
+
+    if (Array.isArray(beh?.selections?.undesirable)) {
+      und = beh.selections.undesirable.filter(Boolean);
+    } else if (typeof beh?.undesirable === 'string' && beh.undesirable.trim()) {
+      und = beh.undesirable.split(',').map((s: string) => s.trim()).filter(Boolean);
+    }
+
+    return { desirable: des, undesirable: und };
+  };
+
+  // รวมรายการหัวข้อพฤติกรรมทั้งหมดจากโครงสร้าง behaviors
+  const allDesirableItems = useMemo(() => {
+    return behaviors.desirable.flatMap(c => c.items.map(item => ({ category: c.cat, item })));
+  }, []);
+
+  const allUndesirableItems = useMemo(() => {
+    return behaviors.undesirable.flatMap(c => c.items.map(item => ({ category: c.cat, item })));
+  }, []);
+
+  // กรองรายชื่อผู้เรียนตามสิทธิ์ของ Superadmin
+  const displayUsers = useMemo(() => {
+    if (profile.id === 'rung' || profile.role === 'superadmin') {
+      if (profile.id === 'rung' || !profile.affiliation || profile.affiliation === 'all') return users;
+      return users;
+    }
+    return users.filter((u: any) =>
+      Array.isArray(profile.affiliation)
+        ? profile.affiliation.includes(u.affiliation)
+        : u.affiliation === profile.affiliation
+    );
+  }, [users, profile]);
+
+  const studentUsers = useMemo(() => {
+    return displayUsers.filter((u: any) => ['student', 'community', 'teacher'].includes(u.accountType) || u.role === 'user');
+  }, [displayUsers]);
+
+  const availableAffiliations = useMemo(() => {
+    const set = new Set<string>();
+    studentUsers.forEach((u: any) => {
+      if (Array.isArray(u.affiliation)) {
+        u.affiliation.forEach((sub: any) => { if (sub && String(sub).trim()) set.add(String(sub).trim()); });
+      } else if (typeof u.affiliation === 'string') {
+        u.affiliation.split(',').forEach((sub: string) => { if (sub.trim()) set.add(sub.trim()); });
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'th'));
+  }, [studentUsers]);
+
+  // ลบประวัติการประเมินพฤติกรรม (เฉพาะ Superadmin)
+  const handleDeleteBehaviorRecord = (record: any) => {
+    if (!triggerConfirm) return;
+    triggerConfirm(`ยืนยันการลบข้อมูลการประเมินพฤติกรรมของ "${record.studentName}" (ครั้งที่ ${record.roundNumber}) หรือไม่?`, async () => {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', record.id));
+      syncToGoogleSheet('DELETE_BEHAVIOR', { targetName: record.studentName, timestamp: record.timestamp });
+      if (triggerAlert) triggerAlert('ลบรายการประเมินพฤติกรรมเรียบร้อยแล้วค่ะ', 'success');
+      if (inspectingRecordId === record.id) setInspectingRecordId(null);
+    }, 'danger');
+  };
+
+  // ประมวลผลข้อมูลพฤติกรรมทั้งหมด เชื่อมโยงกับผู้เรียนและรอบ ST-5
+  const processedData = useMemo(() => {
+    const userMap = new Map<string, any>();
+    const nameMap = new Map<string, any>();
+    studentUsers.forEach((u: any) => {
+      userMap.set(String(u.id), u);
+      if (u.name) nameMap.set(String(u.name).trim(), u);
+    });
+
+    // จัดกลุ่ม behaviorData ตามผู้เรียน เพื่อคำนวณครั้งที่ประเมิน (Round 1, 2, 3...)
+    const groupedByStudent = new Map<string, any[]>();
+
+    behaviorData.forEach((beh: any) => {
+      const rawUid = beh.targetUid || beh.uid || beh.userId || '';
+      let matchedUser = userMap.get(String(rawUid));
+      if (!matchedUser && beh.targetName) {
+        matchedUser = nameMap.get(String(beh.targetName).trim());
+      }
+      const studentKey = matchedUser ? String(matchedUser.id) : (String(rawUid) || String(beh.targetName || 'unknown'));
+      if (!groupedByStudent.has(studentKey)) {
+        groupedByStudent.set(studentKey, []);
+      }
+      groupedByStudent.get(studentKey)!.push({ beh, matchedUser });
+    });
+
+    const allRecords: any[] = [];
+    const studentProfiles: any[] = [];
+
+    groupedByStudent.forEach((entries, studentKey) => {
+      // เรียงตามเวลาเก่า -> ใหม่ เพื่อระบุครั้งที่ 1, 2, 3...
+      const sorted = [...entries].sort((a, b) => getSafeTimestamp(a.beh.timestamp) - getSafeTimestamp(b.beh.timestamp));
+      const totalRounds = sorted.length;
+      const sampleUser = sorted[0]?.matchedUser;
+      const studentName = sampleUser?.name || sorted[0]?.beh?.targetName || studentKey;
+      const studentAff = sampleUser?.affiliation || 'ไม่ระบุสังกัด';
+      const areaMeta = getAreaMetadata(Array.isArray(studentAff) ? studentAff[0] : String(studentAff));
+
+      // ดึงประวัติ ST-5 ของนักเรียนคนนี้ (เก่า -> ใหม่)
+      const userSt5 = st5Data
+        .filter((s: any) => String(s.uid || s.userId) === studentKey || (s.userName && s.userName === studentName))
+        .sort((a: any, b: any) => getSafeTimestamp(a.timestamp) - getSafeTimestamp(b.timestamp));
+
+      const latestSt5 = userSt5.length > 0 ? userSt5[userSt5.length - 1] : null;
+      const latestSt5Score = latestSt5 ? Number(latestSt5.score) || 0 : null;
+      const latestSt5Status = latestSt5Score !== null ? calculateST5(latestSt5Score) : null;
+
+      let studentTotalDes = 0;
+      let studentTotalUnd = 0;
+      const uniqueDesSet = new Set<string>();
+      const uniqueUndSet = new Set<string>();
+
+      const studentRoundRecords: any[] = [];
+
+      sorted.forEach(({ beh }, idx) => {
+        const roundNumber = idx + 1;
+        const isFirst = idx === 0;
+        const isLatest = idx === totalRounds - 1;
+        const ts = getSafeTimestamp(beh.timestamp);
+        const { desirable, undesirable } = extractSelections(beh);
+
+        studentTotalDes += desirable.length;
+        studentTotalUnd += undesirable.length;
+        desirable.forEach(item => uniqueDesSet.add(item));
+        undesirable.forEach(item => uniqueUndSet.add(item));
+
+        // หา ST-5 ที่อ้างอิงกับรอบนี้
+        let linkedSt5: any = null;
+        let linkedSt5RoundNum: number | null = null;
+        if (beh.st5RoundId) {
+          const foundIdx = userSt5.findIndex((s: any) => s.id === beh.st5RoundId);
+          if (foundIdx !== -1) {
+            linkedSt5 = userSt5[foundIdx];
+            linkedSt5RoundNum = foundIdx + 1;
+          }
+        }
+        if (!linkedSt5 && userSt5.length > 0) {
+          // หารอบ ST-5 ที่เวลาใกล้เคียงที่สุดหรือเกิดก่อนหน้า
+          const priorSt5 = userSt5.filter((s: any) => getSafeTimestamp(s.timestamp) <= ts + 86400000);
+          if (priorSt5.length > 0) {
+            linkedSt5 = priorSt5[priorSt5.length - 1];
+            linkedSt5RoundNum = userSt5.indexOf(linkedSt5) + 1;
+          } else {
+            linkedSt5 = userSt5[userSt5.length - 1];
+            linkedSt5RoundNum = userSt5.length;
+          }
+        }
+
+        const linkedSt5Score = linkedSt5 ? (Number(linkedSt5.score) || 0) : null;
+        const linkedSt5Status = linkedSt5Score !== null ? calculateST5(linkedSt5Score) : null;
+
+        const netBalance = desirable.length - undesirable.length;
+
+        const recordObj = {
+          id: beh.id || `${studentKey}-beh-${roundNumber}`,
+          studentId: studentKey,
+          studentName,
+          student: sampleUser || { id: studentKey, name: studentName, affiliation: studentAff, accountType: 'student' },
+          affiliation: displayAffiliation(studentAff) || 'ไม่ระบุสังกัด',
+          model: areaMeta.model,
+          district: areaMeta.district,
+          roundNumber,
+          totalRounds,
+          isFirst,
+          isLatest,
+          timestamp: ts,
+          desirable,
+          undesirable,
+          desCount: desirable.length,
+          undCount: undesirable.length,
+          netBalance,
+          linkedSt5Score,
+          linkedSt5Status,
+          linkedSt5RoundNum,
+          st5RoundId: beh.st5RoundId || ''
+        };
+
+        allRecords.push(recordObj);
+        studentRoundRecords.push(recordObj);
+      });
+
+      const firstRec = studentRoundRecords[0];
+      const latestRec = studentRoundRecords[studentRoundRecords.length - 1];
+      const desDiff = totalRounds > 1 ? (latestRec.desCount - firstRec.desCount) : 0;
+      const undDiff = totalRounds > 1 ? (latestRec.undCount - firstRec.undCount) : 0;
+
+      studentProfiles.push({
+        studentId: studentKey,
+        studentName,
+        student: sampleUser || { id: studentKey, name: studentName, affiliation: studentAff, accountType: 'student' },
+        affiliation: displayAffiliation(studentAff) || 'ไม่ระบุสังกัด',
+        model: areaMeta.model,
+        district: areaMeta.district,
+        totalAssessments: totalRounds,
+        totalDesirableCount: studentTotalDes,
+        totalUndesirableCount: studentTotalUnd,
+        uniqueDesirable: Array.from(uniqueDesSet),
+        uniqueUndesirable: Array.from(uniqueUndSet),
+        latestRecord: latestRec,
+        firstRecord: firstRec,
+        desDiff,
+        undDiff,
+        latestSt5Score,
+        latestSt5Status,
+        records: studentRoundRecords
+      });
+    });
+
+    // เรียง allRecords จากเวลาล่าสุด -> เก่าสุด
+    allRecords.sort((a, b) => b.timestamp - a.timestamp);
+    // เรียง studentProfiles ตามจำนวนครั้งที่ประเมิน หรือความเสี่ยง
+    studentProfiles.sort((a, b) => b.latestRecord.timestamp - a.latestRecord.timestamp);
+
+    return { allRecords, studentProfiles };
+  }, [studentUsers, behaviorData, st5Data]);
+
+  // ฟังก์ชันตรวจสอบการผ่านเกณฑ์ฟิลเตอร์พื้นที่และคำค้นหา
+  const matchesAreaAndSearch = (item: any, checkItems: string[] = []) => {
+    if (selectedAffiliation !== 'all' && !matchAffiliation(item.affiliation, selectedAffiliation)) return false;
+    if (selectedModel !== 'all' && item.model !== selectedModel) return false;
+    if (selectedDistrict !== 'all' && item.district !== selectedDistrict) return false;
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const matchName = item.studentName && String(item.studentName).toLowerCase().includes(q);
+      const matchId = item.studentId && String(item.studentId).toLowerCase().includes(q);
+      const matchAff = item.affiliation && String(item.affiliation).toLowerCase().includes(q);
+      const matchBehItem = checkItems.some(b => String(b).toLowerCase().includes(q));
+      if (!matchName && !matchId && !matchAff && !matchBehItem) return false;
+    }
+    return true;
+  };
+
+  // กรองรายการประเมินรายครั้ง (Filtered Records)
+  const filteredRecords = useMemo(() => {
+    return processedData.allRecords.filter(rec => {
+      if (!matchesAreaAndSearch(rec, [...rec.desirable, ...rec.undesirable])) return false;
+
+      // กรองตามรอบการประเมิน
+      if (roundFilter === 'latest' && !rec.isLatest) return false;
+      if (roundFilter === '1' && rec.roundNumber !== 1) return false;
+      if (roundFilter === '2' && rec.roundNumber !== 2) return false;
+      if (roundFilter === '3+' && rec.roundNumber < 3) return false;
+
+      // กรองตามประเภทผลประเมินพฤติกรรม
+      if (behaviorTypeFilter === 'has_positive' && rec.desCount === 0) return false;
+      if (behaviorTypeFilter === 'has_negative' && rec.undCount === 0) return false;
+      if (behaviorTypeFilter === 'positive_only' && (rec.desCount === 0 || rec.undCount > 0)) return false;
+      if (behaviorTypeFilter === 'negative_dominant' && rec.undCount <= rec.desCount) return false;
+      if (behaviorTypeFilter === 'both' && (rec.desCount === 0 || rec.undCount === 0)) return false;
+
+      // กรองตามหัวข้อพฤติกรรมย่อย
+      if (specificItemFilter !== 'all') {
+        const hasItem = rec.desirable.includes(specificItemFilter) || rec.undesirable.includes(specificItemFilter);
+        if (!hasItem) return false;
+      }
+
+      return true;
+    });
+  }, [processedData.allRecords, selectedAffiliation, selectedModel, selectedDistrict, roundFilter, behaviorTypeFilter, specificItemFilter, searchQuery]);
+
+  // กรองโปรไฟล์รายบุคคล (Filtered Student Profiles)
+  const filteredStudents = useMemo(() => {
+    return processedData.studentProfiles.filter(sp => {
+      if (!matchesAreaAndSearch(sp, [...sp.uniqueDesirable, ...sp.uniqueUndesirable])) return false;
+
+      if (roundFilter === '1' && sp.totalAssessments !== 1) return false;
+      if (roundFilter === '2' && sp.totalAssessments !== 2) return false;
+      if (roundFilter === '3+' && sp.totalAssessments < 3) return false;
+
+      if (behaviorTypeFilter === 'has_positive' && sp.totalDesirableCount === 0) return false;
+      if (behaviorTypeFilter === 'has_negative' && sp.totalUndesirableCount === 0) return false;
+      if (behaviorTypeFilter === 'positive_only' && (sp.totalDesirableCount === 0 || sp.totalUndesirableCount > 0)) return false;
+      if (behaviorTypeFilter === 'negative_dominant' && sp.totalUndesirableCount <= sp.totalDesirableCount) return false;
+      if (behaviorTypeFilter === 'both' && (sp.totalDesirableCount === 0 || sp.totalUndesirableCount === 0)) return false;
+
+      if (specificItemFilter !== 'all') {
+        const hasItem = sp.uniqueDesirable.includes(specificItemFilter) || sp.uniqueUndesirable.includes(specificItemFilter);
+        if (!hasItem) return false;
+      }
+
+      return true;
+    });
+  }, [processedData.studentProfiles, selectedAffiliation, selectedModel, selectedDistrict, roundFilter, behaviorTypeFilter, specificItemFilter, searchQuery]);
+
+  // คำนวณสถิติภาพรวม KPIs และความถี่รายหมวดหมู่จากข้อมูลที่กรองแล้ว
+  const analyticsStats = useMemo(() => {
+    const records = filteredRecords;
+    const uniqueStudentIds = new Set(records.map(r => r.studentId));
+    let totalDesItems = 0;
+    let totalUndItems = 0;
+    let recordsWithDes = 0;
+    let recordsWithUnd = 0;
+    const studentsWithUndSet = new Set<string>();
+    const studentsWithDesSet = new Set<string>();
+
+    const desItemFreq: Record<string, { count: number; students: Set<string>; category: string }> = {};
+    const undItemFreq: Record<string, { count: number; students: Set<string>; category: string }> = {};
+
+    allDesirableItems.forEach(({ category, item }) => {
+      desItemFreq[item] = { count: 0, students: new Set(), category };
+    });
+    allUndesirableItems.forEach(({ category, item }) => {
+      undItemFreq[item] = { count: 0, students: new Set(), category };
+    });
+
+    records.forEach(rec => {
+      if (rec.desCount > 0) {
+        recordsWithDes++;
+        studentsWithDesSet.add(rec.studentId);
+      }
+      if (rec.undCount > 0) {
+        recordsWithUnd++;
+        studentsWithUndSet.add(rec.studentId);
+      }
+      totalDesItems += rec.desCount;
+      totalUndItems += rec.undCount;
+
+      rec.desirable.forEach((item: string) => {
+        if (!desItemFreq[item]) desItemFreq[item] = { count: 0, students: new Set(), category: 'อื่นๆ' };
+        desItemFreq[item].count++;
+        desItemFreq[item].students.add(rec.studentId);
+      });
+
+      rec.undesirable.forEach((item: string) => {
+        const normalized = item === 'ภาวะซึมเศร้าและวิตกกังวล' ? 'ภาวะซึมเครียดและวิตกกังวล' : item;
+        if (!undItemFreq[normalized]) undItemFreq[normalized] = { count: 0, students: new Set(), category: 'อื่นๆ' };
+        undItemFreq[normalized].count++;
+        undItemFreq[normalized].students.add(rec.studentId);
+      });
+    });
+
+    const desRanking = Object.entries(desItemFreq)
+      .map(([item, data]) => ({
+        item,
+        category: data.category,
+        count: data.count,
+        studentCount: data.students.size,
+        pctStudents: uniqueStudentIds.size > 0 ? Math.round((data.students.size / uniqueStudentIds.size) * 100) : 0
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const undRanking = Object.entries(undItemFreq)
+      .map(([item, data]) => ({
+        item,
+        category: data.category,
+        count: data.count,
+        studentCount: data.students.size,
+        pctStudents: uniqueStudentIds.size > 0 ? Math.round((data.students.size / uniqueStudentIds.size) * 100) : 0
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const totalItemsCombined = totalDesItems + totalUndItems;
+    const positiveRatio = totalItemsCombined > 0 ? Math.round((totalDesItems / totalItemsCombined) * 100) : 0;
+    const negativeRatio = totalItemsCombined > 0 ? 100 - positiveRatio : 0;
+
+    return {
+      totalRecords: records.length,
+      uniqueStudentsCount: uniqueStudentIds.size,
+      totalDesItems,
+      totalUndItems,
+      recordsWithDes,
+      recordsWithUnd,
+      studentsWithDesCount: studentsWithDesSet.size,
+      studentsWithUndCount: studentsWithUndSet.size,
+      avgDesPerRecord: records.length > 0 ? (totalDesItems / records.length).toFixed(1) : '0.0',
+      avgUndPerRecord: records.length > 0 ? (totalUndItems / records.length).toFixed(1) : '0.0',
+      topDesirable: desRanking[0]?.count > 0 ? desRanking[0] : null,
+      topUndesirable: undRanking[0]?.count > 0 ? undRanking[0] : null,
+      desRanking,
+      undRanking,
+      positiveRatio,
+      negativeRatio
+    };
+  }, [filteredRecords, allDesirableItems, allUndesirableItems]);
+
+  // สรุปข้อมูลแยกตามสังกัด (Affiliation Breakdown)
+  const affiliationStats = useMemo(() => {
+    return availableAffiliations
+      .filter(aff => {
+        const meta = getAreaMetadata(aff);
+        if (selectedModel !== 'all' && meta.model !== selectedModel) return false;
+        if (selectedDistrict !== 'all' && meta.district !== selectedDistrict) return false;
+        if (selectedAffiliation !== 'all' && !matchAffiliation(aff, selectedAffiliation)) return false;
+        return true;
+      })
+      .map(aff => {
+        const meta = getAreaMetadata(aff);
+        const studentsInAff = studentUsers.filter((u: any) => matchAffiliation(u.affiliation, aff));
+        const recordsInAff = processedData.allRecords.filter(r => matchAffiliation(r.affiliation, aff));
+        const evaluatedStudentsSet = new Set(recordsInAff.map(r => r.studentId));
+        const riskStudentsSet = new Set(recordsInAff.filter(r => r.undCount > 0).map(r => r.studentId));
+
+        let desSum = 0;
+        let undSum = 0;
+        const desCounter: Record<string, number> = {};
+        const undCounter: Record<string, number> = {};
+
+        recordsInAff.forEach(r => {
+          desSum += r.desCount;
+          undSum += r.undCount;
+          r.desirable.forEach((d: string) => { desCounter[d] = (desCounter[d] || 0) + 1; });
+          r.undesirable.forEach((u: string) => { undCounter[u] = (undCounter[u] || 0) + 1; });
+        });
+
+        const topDes = Object.entries(desCounter).sort((a, b) => b[1] - a[1])[0];
+        const topUnd = Object.entries(undCounter).sort((a, b) => b[1] - a[1])[0];
+        const totalCombined = desSum + undSum;
+        const posPct = totalCombined > 0 ? Math.round((desSum / totalCombined) * 100) : 0;
+
+        return {
+          affiliation: aff,
+          model: meta.model,
+          district: meta.district,
+          totalStudents: studentsInAff.length,
+          evaluatedStudents: evaluatedStudentsSet.size,
+          coveragePct: studentsInAff.length > 0 ? Math.round((evaluatedStudentsSet.size / studentsInAff.length) * 100) : 0,
+          totalAssessments: recordsInAff.length,
+          desSum,
+          undSum,
+          riskStudentsCount: riskStudentsSet.size,
+          posPct,
+          topDesirable: topDes ? `${topDes[0]} (${topDes[1]})` : '-',
+          topUndesirable: topUnd ? `${topUnd[0]} (${topUnd[1]})` : '-'
+        };
+      })
+      .sort((a, b) => b.totalAssessments - a.totalAssessments);
+  }, [availableAffiliations, selectedModel, selectedDistrict, selectedAffiliation, studentUsers, processedData.allRecords]);
+
+  // Pagination สำหรับตาราง Records หรือ Students
+  const activeDataset = subView === 'records' ? filteredRecords : subView === 'students' ? filteredStudents : [];
+  const totalCount = activeDataset.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const paginatedDataset = useMemo(() => {
+    if (pageSize >= 99999) return activeDataset;
+    const start = (safeCurrentPage - 1) * pageSize;
+    return activeDataset.slice(start, start + pageSize);
+  }, [activeDataset, safeCurrentPage, pageSize]);
+
+  const isFilterActive =
+    selectedAffiliation !== 'all' ||
+    selectedModel !== 'all' ||
+    selectedDistrict !== 'all' ||
+    behaviorTypeFilter !== 'all' ||
+    specificItemFilter !== 'all' ||
+    roundFilter !== 'all' ||
+    searchQuery.trim() !== '';
+
+  const handleResetFilters = () => {
+    setSelectedAffiliation('all');
+    setSelectedModel('all');
+    setSelectedDistrict('all');
+    setBehaviorTypeFilter('all');
+    setSpecificItemFilter('all');
+    setRoundFilter('all');
+    setSearchQuery('');
+    setCurrentPage(1);
+  };
+
+  // ส่งออกข้อมูลรายละเอียดการประเมินพฤติกรรมเป็นไฟล์ CSV (รองรับภาษาไทย Excel UTF-8 BOM)
+  const handleExportCSV = () => {
+    if (filteredRecords.length === 0) {
+      if (triggerAlert) triggerAlert('ไม่มีข้อมูลตามเงื่อนไขตัวกรองสำหรับส่งออก CSV', 'error');
+      return;
+    }
+
+    const headers = [
+      'ลำดับ',
+      'วันที่ประเมิน',
+      'เวลา',
+      'รหัสผู้ใช้งาน',
+      'ชื่อ-นามสกุล',
+      'สังกัด/สถานศึกษา/ชุมชน',
+      'โมเดล',
+      'อำเภอ',
+      'ครั้งที่ประเมินพฤติกรรม',
+      'จำนวนครั้งที่ประเมินรวม',
+      'จำนวนพฤติกรรมเชิงบวก (ข้อ)',
+      'รายละเอียดพฤติกรรมเชิงบวก (พึงประสงค์)',
+      'จำนวนพฤติกรรมเชิงลบ (ข้อ)',
+      'รายละเอียดพฤติกรรมเชิงลบ (เฝ้าระวัง)',
+      'ดุลพฤติกรรมสุทธิ (บวก-ลบ)',
+      'คะแนน ST-5 อ้างอิง',
+      'ระดับความเครียด ST-5'
+    ];
+
+    const escapeCsv = (val: any) => {
+      const str = String(val ?? '').replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = filteredRecords.map((rec, index) => {
+      const d = rec.timestamp ? new Date(rec.timestamp) : null;
+      const dateStr = d ? d.toLocaleDateString('th-TH') : '-';
+      const timeStr = d ? d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) : '-';
+      return [
+        index + 1,
+        dateStr,
+        timeStr,
+        rec.studentId,
+        rec.studentName,
+        rec.affiliation,
+        rec.model,
+        rec.district,
+        `ครั้งที่ ${rec.roundNumber}`,
+        rec.totalRounds,
+        rec.desCount,
+        rec.desirable.join(' | ') || '-',
+        rec.undCount,
+        rec.undesirable.join(' | ') || '-',
+        rec.netBalance > 0 ? `+${rec.netBalance} (เชิงบวกเด่น)` : rec.netBalance < 0 ? `${rec.netBalance} (ต้องเฝ้าระวัง)` : '0 (สมดุล)',
+        rec.linkedSt5Score !== null ? rec.linkedSt5Score : '-',
+        rec.linkedSt5Status ? rec.linkedSt5Status.level : '-'
+      ].map(escapeCsv).join(',');
+    });
+
+    const csvContent = '\uFEFF' + [headers.map(escapeCsv).join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Superadmin_Behavior_Report_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    if (triggerAlert) triggerAlert(`ดาวน์โหลดรายงานข้อมูลพฤติกรรม (${filteredRecords.length} รายการ) สำเร็จแล้วค่ะ ✦`, 'success');
+  };
+
+  // ข้อมูลสำหรับ Modal เจาะลึกรายบุคคล
+  const inspectedStudentProfile = useMemo(() => {
+    if (!inspectingStudentId) return null;
+    return processedData.studentProfiles.find(sp => sp.studentId === inspectingStudentId) || null;
+  }, [inspectingStudentId, processedData.studentProfiles]);
+
+  const inspectedRecord = useMemo(() => {
+    if (!inspectedStudentProfile) return null;
+    if (inspectingRecordId) {
+      const found = inspectedStudentProfile.records.find((r: any) => r.id === inspectingRecordId);
+      if (found) return found;
+    }
+    return inspectedStudentProfile.latestRecord;
+  }, [inspectedStudentProfile, inspectingRecordId]);
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-300">
+      {/* 🟢 HEADER BANNER */}
+      <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+        <div className="flex items-start sm:items-center gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center shadow-lg shadow-emerald-200 shrink-0">
+            <ClipboardList size={28} />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-purple-100 text-purple-700 border border-purple-200">
+                SUPERADMIN EXCLUSIVE
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-teal-50 text-teal-700 border border-teal-200">
+                Positive & Negative Behavior Analytics
+              </span>
+            </div>
+            <h2 className="text-xl md:text-2xl font-black text-slate-800 mt-1">
+              รายงานรายละเอียดข้อมูลการประเมินพฤติกรรม (เชิงบวก - เชิงลบ)
+            </h2>
+            <p className="text-xs md:text-sm text-slate-500 font-medium mt-0.5">
+              ศูนย์รวมข้อมูลการประเมินพฤติกรรมพึงประสงค์ (เชิงบวก) และพฤติกรรมที่ต้องเฝ้าระวัง (เชิงลบ) รายบุคคล รายหมวดหมู่ และรายสังกัด
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <button
+            onClick={handleExportCSV}
+            className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-xs md:text-sm shadow-md shadow-emerald-100 transition flex items-center gap-2 cursor-pointer"
+          >
+            <Download size={16} /> ส่งออกตารางรายงาน (CSV)
+          </button>
+        </div>
+      </div>
+
+      {/* 🟢 4 KPI SUMMARY CARDS */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* KPI 1: ยอดการประเมินพฤติกรรม */}
+        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-400">การประเมินพฤติกรรมรวม</span>
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100">
+              <ClipboardList size={20} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-black text-slate-800">{analyticsStats.totalRecords}</span>
+              <span className="text-xs font-bold text-slate-400">ครั้ง</span>
+            </div>
+            <p className="text-xs font-bold text-indigo-600 mt-1">
+              ผู้รับการประเมิน {analyticsStats.uniqueStudentsCount} คน
+            </p>
+          </div>
+        </div>
+
+        {/* KPI 2: พฤติกรรมเชิงบวก (พึงประสงค์) */}
+        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-teal-100 flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-teal-600">พฤติกรรมเชิงบวก (น่าชื่นชม)</span>
+            <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center border border-teal-100">
+              <CheckCircle2 size={20} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-black text-teal-600">{analyticsStats.totalDesItems}</span>
+              <span className="text-xs font-bold text-slate-400">ข้อสะสม ({analyticsStats.studentsWithDesCount} คน)</span>
+            </div>
+            <p className="text-[11px] font-bold text-teal-700 mt-1 truncate" title={analyticsStats.topDesirable?.item || '-'}>
+              เด่นสุด: {analyticsStats.topDesirable ? `${analyticsStats.topDesirable.item} (${analyticsStats.topDesirable.count})` : 'ยังไม่มีข้อมูล'}
+            </p>
+          </div>
+        </div>
+
+        {/* KPI 3: พฤติกรรมเชิงลบ (ต้องเฝ้าระวัง) */}
+        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-rose-100 flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-rose-600">พฤติกรรมเชิงลบ (เฝ้าระวัง)</span>
+            <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center border border-rose-100">
+              <AlertCircle size={20} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-black text-rose-600">{analyticsStats.totalUndItems}</span>
+              <span className="text-xs font-bold text-slate-400">ข้อสะสม ({analyticsStats.studentsWithUndCount} คน)</span>
+            </div>
+            <p className="text-[11px] font-bold text-rose-700 mt-1 truncate" title={analyticsStats.topUndesirable?.item || '-'}>
+              พบสูงสุด: {analyticsStats.topUndesirable ? `${analyticsStats.topUndesirable.item} (${analyticsStats.topUndesirable.count})` : 'ไม่พบความเสี่ยง'}
+            </p>
+          </div>
+        </div>
+
+        {/* KPI 4: สัดส่วนสมดุลพฤติกรรม บวก vs ลบ */}
+        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-500">สัดส่วนพฤติกรรม บวก : ลบ</span>
+            <span className="text-xs font-black text-teal-600 bg-teal-50 px-2.5 py-0.5 rounded-full border border-teal-200">
+              {analyticsStats.positiveRatio}% : {analyticsStats.negativeRatio}%
+            </span>
+          </div>
+          <div className="mt-3 space-y-2">
+            <div className="w-full h-3 bg-rose-100 rounded-full overflow-hidden flex">
+              <div
+                className="h-full bg-teal-500 transition-all duration-500"
+                style={{ width: `${analyticsStats.positiveRatio}%` }}
+              />
+              <div
+                className="h-full bg-rose-500 transition-all duration-500"
+                style={{ width: `${analyticsStats.negativeRatio}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-[11px] font-bold">
+              <span className="text-teal-600">เฉลี่ยบวก {analyticsStats.avgDesPerRecord} ข้อ/ครั้ง</span>
+              <span className="text-rose-500">เฉลี่ยลบ {analyticsStats.avgUndPerRecord} ข้อ/ครั้ง</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 🟢 FILTER & SUB-TAB NAVIGATION BAR */}
+      <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-5">
+        {/* Sub-view Switcher */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+          <div className="flex flex-wrap items-center gap-2 bg-slate-100 p-1.5 rounded-2xl">
+            <button
+              onClick={() => setSubView('records')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                subView === 'records' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <ClipboardList size={15} />
+              รายการประเมินรายครั้ง ({filteredRecords.length})
+            </button>
+            <button
+              onClick={() => setSubView('students')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                subView === 'students' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Users size={15} />
+              สรุปรายบุคคล ({filteredStudents.length} คน)
+            </button>
+            <button
+              onClick={() => setSubView('categories')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                subView === 'categories' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <BarChart2 size={15} />
+              วิเคราะห์รายหัวข้อ (บวก 10 / ลบ 10)
+            </button>
+            <button
+              onClick={() => setSubView('affiliations')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                subView === 'affiliations' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Layers size={15} />
+              เปรียบเทียบรายสังกัด ({affiliationStats.length})
+            </button>
+          </div>
+
+          {isFilterActive && (
+            <button
+              onClick={handleResetFilters}
+              className="self-start md:self-auto text-xs font-bold text-rose-500 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-3.5 py-2 rounded-xl border border-rose-200 transition flex items-center gap-1.5"
+            >
+              <X size={14} /> ล้างตัวกรองทั้งหมด
+            </button>
+          )}
+        </div>
+
+        {/* Multi-dimensional Filters */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+          {/* 1. Search */}
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="ค้นหาชื่อ, @ID, สังกัด, พฤติกรรม..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* 2. Affiliation Filter */}
+          <select
+            value={selectedAffiliation}
+            onChange={(e) => setSelectedAffiliation(e.target.value)}
+            className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400"
+          >
+            <option value="all">🏫 ทุกสังกัด / โรงเรียน / ชุมชน</option>
+            {availableAffiliations.map((aff) => (
+              <option key={aff} value={aff}>{aff}</option>
+            ))}
+          </select>
+
+          {/* 3. Model & District Filter */}
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="w-full px-2.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400"
+            >
+              <option value="all">ทุกโมเดล</option>
+              {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <select
+              value={selectedDistrict}
+              onChange={(e) => setSelectedDistrict(e.target.value)}
+              className="w-full px-2.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400"
+            >
+              <option value="all">ทุกอำเภอ</option>
+              {districtOptions.map(d => <option key={d} value={d}>อ.{d}</option>)}
+            </select>
+          </div>
+
+          {/* 4. Behavior Type Filter (Positive / Negative) */}
+          <select
+            value={behaviorTypeFilter}
+            onChange={(e) => setBehaviorTypeFilter(e.target.value)}
+            className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400"
+          >
+            <option value="all">⚖️ ทุกประเภทพฤติกรรม (บวก & ลบ)</option>
+            <option value="has_positive">🟢 พบพฤติกรรมเชิงบวก (≥ 1 ข้อ)</option>
+            <option value="positive_only">✨ เชิงบวกอย่างเดียว (ไร้ความเสี่ยง)</option>
+            <option value="has_negative">🔴 พบพฤติกรรมเชิงลบ/เฝ้าระวัง (≥ 1 ข้อ)</option>
+            <option value="negative_dominant">🚨 เชิงลบมากกว่าเชิงบวก (เฝ้าระวังพิเศษ)</option>
+            <option value="both">🔄 พบทั้งเชิงบวกและเชิงลบควบคู่กัน</option>
+          </select>
+
+          {/* 5. Specific Behavior Item Filter */}
+          <select
+            value={specificItemFilter}
+            onChange={(e) => setSpecificItemFilter(e.target.value)}
+            className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400"
+          >
+            <option value="all">📌 ทุกหัวข้อพฤติกรรมย่อย (20 ข้อ)</option>
+            <optgroup label="🟢 พฤติกรรมเชิงบวก (น่าชื่นชม)">
+              {allDesirableItems.map(({ item }) => (
+                <option key={`opt-des-${item}`} value={item}>+ {item}</option>
+              ))}
+            </optgroup>
+            <optgroup label="🔴 พฤติกรรมเชิงลบ (ต้องเฝ้าระวัง)">
+              {allUndesirableItems.map(({ item }) => (
+                <option key={`opt-und-${item}`} value={item}>- {item}</option>
+              ))}
+            </optgroup>
+          </select>
+
+          {/* 6. Round Filter */}
+          <select
+            value={roundFilter}
+            onChange={(e) => setRoundFilter(e.target.value)}
+            className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400"
+          >
+            <option value="all">🕒 ทุกรอบการประเมิน</option>
+            <option value="latest">⭐ เฉพาะครั้งล่าสุดของแต่ละคน</option>
+            <option value="1">ครั้งที่ 1 (ประเมินรอบแรก)</option>
+            <option value="2">ครั้งที่ 2 (ติดตามผล)</option>
+            <option value="3+">ครั้งที่ 3 ขึ้นไป (ติดตามต่อเนื่อง)</option>
+          </select>
+        </div>
+
+        {/* Active Specific Item Banner */}
+        {specificItemFilter !== 'all' && (
+          <div className="flex items-center justify-between bg-emerald-50/80 border border-emerald-200 px-4 py-2.5 rounded-2xl text-xs">
+            <div className="flex items-center gap-2 font-bold text-emerald-800">
+              <Filter size={14} className="text-emerald-600" />
+              <span>กำลังกรองเฉพาะผู้เรียนที่มีพฤติกรรมหัวข้อ:</span>
+              <span className="px-2.5 py-0.5 rounded-full bg-white border border-emerald-300 text-emerald-700 font-black">
+                {specificItemFilter}
+              </span>
+            </div>
+            <button
+              onClick={() => setSpecificItemFilter('all')}
+              className="text-emerald-700 hover:text-rose-600 font-bold underline"
+            >
+              แสดงทุกหัวข้อ
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* =========================================================
+          VIEW 1: รายการประเมินพฤติกรรมรายครั้ง (DETAILED ASSESSMENT LOGS)
+          ========================================================= */}
+      {subView === 'records' && (
+        <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+          {filteredRecords.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[1050px]">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs font-bold">
+                  <tr>
+                    <th className="p-4 pl-6 w-14 text-center">ลำดับ</th>
+                    <th className="p-4">ผู้รับการประเมิน / สังกัด</th>
+                    <th className="p-4 text-center">รอบประเมิน & วันที่</th>
+                    <th className="p-4 w-[28%]">
+                      <span className="inline-flex items-center gap-1.5 text-teal-700">
+                        <CheckCircle2 size={14} /> รายละเอียดพฤติกรรมเชิงบวก (พึงประสงค์)
+                      </span>
+                    </th>
+                    <th className="p-4 w-[28%]">
+                      <span className="inline-flex items-center gap-1.5 text-rose-600">
+                        <AlertCircle size={14} /> รายละเอียดพฤติกรรมเชิงลบ (เฝ้าระวัง)
+                      </span>
+                    </th>
+                    <th className="p-4 text-center">ST-5 อ้างอิง</th>
+                    <th className="p-4 pr-6 text-right">จัดการ / เจาะลึก</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {paginatedDataset.map((rec: any, idx: number) => {
+                    const seqNum = (safeCurrentPage - 1) * pageSize + idx + 1;
+                    return (
+                      <tr key={`beh-rec-${rec.id}-${seqNum}`} className="hover:bg-slate-50/70 transition-colors align-top">
+                        <td className="p-4 pl-6 text-center">
+                          <span className="w-7 h-7 rounded-full bg-slate-100 text-slate-600 font-bold inline-flex items-center justify-center text-xs border border-slate-200">
+                            {seqNum}
+                          </span>
+                        </td>
+
+                        {/* ข้อมูลผู้เรียน & สังกัด */}
+                        <td className="p-4">
+                          <button
+                            onClick={() => {
+                              setInspectingStudentId(rec.studentId);
+                              setInspectingRecordId(rec.id);
+                            }}
+                            className="font-bold text-slate-800 hover:text-emerald-600 hover:underline text-left block"
+                          >
+                            {rec.studentName}
+                          </button>
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            <span className="text-[10px] font-mono text-slate-400">@{rec.studentId}</span>
+                            <span className="text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md border border-indigo-100">
+                              {rec.affiliation}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              ({rec.model} • อ.{rec.district})
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* รอบประเมิน & วันที่ */}
+                        <td className="p-4 text-center">
+                          <div className="inline-flex flex-col items-center">
+                            <span className="px-3 py-1 rounded-full text-xs font-black bg-purple-50 text-purple-700 border border-purple-200">
+                              ครั้งที่ {rec.roundNumber} / {rec.totalRounds}
+                            </span>
+                            <span className="text-[11px] text-slate-400 font-medium mt-1">
+                              {rec.timestamp ? new Date(rec.timestamp).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: '2-digit' }) : '-'}
+                            </span>
+                            {rec.isLatest && rec.totalRounds > 1 && (
+                              <span className="text-[9px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded mt-0.5">
+                                รอบล่าสุด
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* พฤติกรรมเชิงบวก */}
+                        <td className="p-4">
+                          {rec.desCount > 0 ? (
+                            <div className="space-y-1.5">
+                              <span className="inline-flex items-center gap-1 text-[11px] font-black text-teal-700 bg-teal-50 px-2.5 py-0.5 rounded-full border border-teal-200">
+                                <CheckCircle2 size={12} /> พบ {rec.desCount} ข้อเด่น
+                              </span>
+                              <div className="flex flex-wrap gap-1">
+                                {rec.desirable.map((item: string, i: number) => (
+                                  <span
+                                    key={`d-${i}`}
+                                    onClick={() => setSpecificItemFilter(item)}
+                                    className="cursor-pointer text-[11px] font-semibold bg-teal-50/70 hover:bg-teal-100 text-teal-800 px-2 py-0.5 rounded-lg border border-teal-200/80 transition"
+                                    title="คลิกเพื่อกรองเฉพาะหัวข้อนี้"
+                                  >
+                                    + {item}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400 italic">ไม่พบรายการที่บันทึก</span>
+                          )}
+                        </td>
+
+                        {/* พฤติกรรมเชิงลบ */}
+                        <td className="p-4">
+                          {rec.undCount > 0 ? (
+                            <div className="space-y-1.5">
+                              <span className="inline-flex items-center gap-1 text-[11px] font-black text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200">
+                                <AlertCircle size={12} /> เฝ้าระวัง {rec.undCount} ข้อ
+                              </span>
+                              <div className="flex flex-wrap gap-1">
+                                {rec.undesirable.map((item: string, i: number) => (
+                                  <span
+                                    key={`u-${i}`}
+                                    onClick={() => setSpecificItemFilter(item)}
+                                    className="cursor-pointer text-[11px] font-semibold bg-rose-50/80 hover:bg-rose-100 text-rose-800 px-2 py-0.5 rounded-lg border border-rose-200 transition"
+                                    title="คลิกเพื่อกรองเฉพาะหัวข้อนี้"
+                                  >
+                                    - {item}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50/60 px-2.5 py-1 rounded-xl border border-emerald-100">
+                              <ShieldCheck size={14} /> ปกติ (ไม่พบพฤติกรรมเสี่ยง)
+                            </span>
+                          )}
+                        </td>
+
+                        {/* ST-5 อ้างอิง */}
+                        <td className="p-4 text-center">
+                          {rec.linkedSt5Status ? (
+                            <div className="inline-flex flex-col items-center">
+                              <span className="text-sm font-black text-slate-800">
+                                {rec.linkedSt5Score} <span className="text-[10px] font-normal text-slate-400">/15</span>
+                              </span>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border mt-0.5 ${rec.linkedSt5Status.color}`}>
+                                {rec.linkedSt5Status.level}
+                              </span>
+                              {rec.linkedSt5RoundNum && (
+                                <span className="text-[9px] text-slate-400 mt-0.5">ST-5 ครั้งที่ {rec.linkedSt5RoundNum}</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400">-</span>
+                          )}
+                        </td>
+
+                        {/* จัดการ / ดูรายละเอียด */}
+                        <td className="p-4 pr-6 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => {
+                                setInspectingStudentId(rec.studentId);
+                                setInspectingRecordId(rec.id);
+                              }}
+                              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold transition inline-flex items-center gap-1"
+                            >
+                              รายละเอียด <ChevronRight size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteBehaviorRecord(rec)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition"
+                              title="ลบรายการประเมินนี้"
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-12 text-center space-y-3">
+              <ClipboardList className="mx-auto text-slate-300" size={48} />
+              <p className="font-bold text-slate-700 text-base">ไม่พบรายการประเมินพฤติกรรมตามเงื่อนไขที่เลือก</p>
+              <p className="text-xs text-slate-400">ลองเปลี่ยนตัวกรองสังกัด ประเภทพฤติกรรม หรือล้างตัวกรองทั้งหมด</p>
+            </div>
+          )}
+
+          {/* Pagination Footer */}
+          {totalCount > 0 && (
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <span>แสดง {Math.min((safeCurrentPage - 1) * pageSize + 1, totalCount)} - {Math.min(safeCurrentPage * pageSize, totalCount)} จาก {totalCount} รายการ</span>
+                <span className="text-slate-300">|</span>
+                <span>ต่อหน้า:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-700"
+                >
+                  <option value={15}>15</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={999999}>ทั้งหมด</option>
+                </select>
+              </div>
+              {totalPages > 1 && (
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => setCurrentPage(1)} disabled={safeCurrentPage === 1} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40"><ChevronsLeft size={15} /></button>
+                  <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={safeCurrentPage === 1} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40"><ChevronLeft size={15} /></button>
+                  <span className="px-3 py-1 font-bold bg-white border border-slate-200 rounded-lg">หน้า {safeCurrentPage} / {totalPages}</span>
+                  <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={safeCurrentPage === totalPages} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40"><ChevronRight size={15} /></button>
+                  <button onClick={() => setCurrentPage(totalPages)} disabled={safeCurrentPage === totalPages} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40"><ChevronsRight size={15} /></button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =========================================================
+          VIEW 2: สรุปโปรไฟล์พฤติกรรมรายบุคคล (STUDENT BEHAVIOR PROFILES)
+          ========================================================= */}
+      {subView === 'students' && (
+        <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+          {filteredStudents.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[1000px]">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs font-bold">
+                  <tr>
+                    <th className="p-4 pl-6 w-14 text-center">ลำดับ</th>
+                    <th className="p-4">ชื่อ-สกุล / สังกัด</th>
+                    <th className="p-4 text-center">จำนวนครั้ง</th>
+                    <th className="p-4">จุดแข็ง / พฤติกรรมเชิงบวกที่พบ (Unique)</th>
+                    <th className="p-4">ความเสี่ยง / พฤติกรรมเชิงลบที่พบ (Unique)</th>
+                    <th className="p-4 text-center">แนวโน้มพฤติกรรม</th>
+                    <th className="p-4 pr-6 text-right">ประวัติเชิงลึก</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {paginatedDataset.map((sp: any, idx: number) => {
+                    const seqNum = (safeCurrentPage - 1) * pageSize + idx + 1;
+                    return (
+                      <tr key={`sp-beh-${sp.studentId}-${seqNum}`} className="hover:bg-slate-50/70 transition-colors align-top">
+                        <td className="p-4 pl-6 text-center">
+                          <span className="w-7 h-7 rounded-full bg-slate-100 text-slate-600 font-bold inline-flex items-center justify-center text-xs border border-slate-200">
+                            {seqNum}
+                          </span>
+                        </td>
+                        <td className="p-4">
+                          <button
+                            onClick={() => {
+                              setInspectingStudentId(sp.studentId);
+                              setInspectingRecordId(sp.latestRecord?.id || null);
+                            }}
+                            className="font-bold text-slate-800 hover:text-emerald-600 hover:underline text-left"
+                          >
+                            {sp.studentName}
+                          </button>
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            <span className="text-[10px] font-mono text-slate-400">@{sp.studentId}</span>
+                            <span className="text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md border border-indigo-100">
+                              {sp.affiliation}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-4 text-center">
+                          <span className="px-3 py-1 rounded-full text-xs font-black bg-purple-50 text-purple-700 border border-purple-200">
+                            {sp.totalAssessments} ครั้ง
+                          </span>
+                        </td>
+                        <td className="p-4">
+                          {sp.uniqueDesirable.length > 0 ? (
+                            <div className="space-y-1">
+                              <span className="text-[11px] font-black text-teal-700 block">
+                                รวม {sp.uniqueDesirable.length} หัวข้อ (สะสม {sp.totalDesirableCount} ครั้ง)
+                              </span>
+                              <div className="flex flex-wrap gap-1">
+                                {sp.uniqueDesirable.map((d: string, i: number) => (
+                                  <span key={i} className="text-[10px] font-semibold bg-teal-50 text-teal-800 px-2 py-0.5 rounded-md border border-teal-200">
+                                    + {d}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400 italic">ยังไม่มีบันทึกเชิงบวก</span>
+                          )}
+                        </td>
+                        <td className="p-4">
+                          {sp.uniqueUndesirable.length > 0 ? (
+                            <div className="space-y-1">
+                              <span className="text-[11px] font-black text-rose-700 block">
+                                รวม {sp.uniqueUndesirable.length} หัวข้อ (สะสม {sp.totalUndesirableCount} ครั้ง)
+                              </span>
+                              <div className="flex flex-wrap gap-1">
+                                {sp.uniqueUndesirable.map((u: string, i: number) => (
+                                  <span key={i} className="text-[10px] font-semibold bg-rose-50 text-rose-800 px-2 py-0.5 rounded-md border border-rose-200">
+                                    - {u}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-xs font-bold text-emerald-600">ไม่พบพฤติกรรมเสี่ยง</span>
+                          )}
+                        </td>
+                        <td className="p-4 text-center">
+                          {sp.totalAssessments > 1 ? (
+                            <div className="inline-flex flex-col items-center gap-1 text-xs">
+                              <span className={`font-bold px-2 py-0.5 rounded-md border ${
+                                sp.desDiff > 0 ? 'bg-teal-50 text-teal-700 border-teal-200' : sp.desDiff < 0 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-50 text-slate-600 border-slate-200'
+                              }`}>
+                                เชิงบวก: {sp.desDiff > 0 ? `+${sp.desDiff}` : sp.desDiff}
+                              </span>
+                              <span className={`font-bold px-2 py-0.5 rounded-md border ${
+                                sp.undDiff < 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : sp.undDiff > 0 ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-slate-50 text-slate-600 border-slate-200'
+                              }`}>
+                                เชิงลบ: {sp.undDiff > 0 ? `+${sp.undDiff}` : sp.undDiff}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">ประเมิน 1 ครั้ง</span>
+                          )}
+                        </td>
+                        <td className="p-4 pr-6 text-right">
+                          <button
+                            onClick={() => {
+                              setInspectingStudentId(sp.studentId);
+                              setInspectingRecordId(sp.latestRecord?.id || null);
+                            }}
+                            className="px-3.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-xl text-xs font-bold transition inline-flex items-center gap-1"
+                          >
+                            ดูโปรไฟล์ <ChevronRight size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-12 text-center text-slate-400 text-sm">ไม่พบข้อมูลผู้เรียนตามตัวกรอง</div>
+          )}
+        </div>
+      )}
+
+      {/* =========================================================
+          VIEW 3: วิเคราะห์รายหมวดหมู่และหัวข้อ (CATEGORY & ITEM FREQUENCY MATRIX)
+          ========================================================= */}
+      {subView === 'categories' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* ฝั่งซ้าย: พฤติกรรมเชิงบวก (4 หมวด 10 ข้อ) */}
+          <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-teal-100 space-y-6">
+            <div className="flex items-center justify-between border-b border-teal-100 pb-4">
+              <div>
+                <h3 className="text-lg font-black text-teal-800 flex items-center gap-2">
+                  <CheckCircle2 className="text-teal-500" size={22} />
+                  พฤติกรรมเชิงบวก (พึงประสงค์) 10 หัวข้อ
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">คลิกที่หัวข้อใดก็ได้เพื่อกรองดูรายชื่อนักเรียนที่มีจุดแข็งข้อนั้น</p>
+              </div>
+              <span className="px-3 py-1 rounded-full bg-teal-50 text-teal-700 font-black text-xs border border-teal-200">
+                รวม {analyticsStats.totalDesItems} ครั้ง
+              </span>
+            </div>
+
+            <div className="space-y-6">
+              {behaviors.desirable.map((group, gIdx) => (
+                <div key={`des-cat-${gIdx}`} className="bg-teal-50/30 p-4 rounded-2xl border border-teal-100/80 space-y-3">
+                  <h4 className="text-xs font-black text-teal-800 uppercase tracking-wider flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-teal-500"></span>
+                    {group.cat}
+                  </h4>
+                  <div className="space-y-2.5">
+                    {group.items.map((itemName) => {
+                      const stat = analyticsStats.desRanking.find(d => d.item === itemName) || { count: 0, studentCount: 0, pctStudents: 0 };
+                      const maxDes = Math.max(1, analyticsStats.desRanking[0]?.count || 1);
+                      const barPct = (stat.count / maxDes) * 100;
+                      return (
+                        <div
+                          key={itemName}
+                          onClick={() => {
+                            setSpecificItemFilter(itemName);
+                            setSubView('records');
+                          }}
+                          className="bg-white p-3.5 rounded-xl border border-teal-100 hover:border-teal-300 hover:shadow-xs transition cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between text-xs font-bold text-slate-700 mb-1.5">
+                            <span className="flex items-center gap-1.5">
+                              <CheckCircle2 size={14} className="text-teal-500 shrink-0" />
+                              {itemName}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-teal-700 font-black">{stat.count} ครั้ง</span>
+                              <span className="text-[10px] bg-teal-50 text-teal-600 px-2 py-0.5 rounded-full border border-teal-200">
+                                {stat.studentCount} คน ({stat.pctStudents}%)
+                              </span>
+                            </div>
+                          </div>
+                          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-teal-500 rounded-full transition-all duration-500" style={{ width: `${stat.count === 0 ? 0 : Math.max(4, barPct)}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ฝั่งขวา: พฤติกรรมเชิงลบ (5 หมวด 10 ข้อ) */}
+          <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-rose-100 space-y-6">
+            <div className="flex items-center justify-between border-b border-rose-100 pb-4">
+              <div>
+                <h3 className="text-lg font-black text-rose-800 flex items-center gap-2">
+                  <AlertCircle className="text-rose-500" size={22} />
+                  พฤติกรรมเชิงลบ (ต้องเฝ้าระวัง) 10 หัวข้อ
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">คลิกที่หัวข้อใดก็ได้เพื่อกรองดูรายชื่อนักเรียนที่ต้องเฝ้าระวังในข้อนั้น</p>
+              </div>
+              <span className="px-3 py-1 rounded-full bg-rose-50 text-rose-700 font-black text-xs border border-rose-200">
+                รวม {analyticsStats.totalUndItems} ครั้ง
+              </span>
+            </div>
+
+            <div className="space-y-6">
+              {behaviors.undesirable.map((group, gIdx) => (
+                <div key={`und-cat-${gIdx}`} className="bg-rose-50/30 p-4 rounded-2xl border border-rose-100/80 space-y-3">
+                  <h4 className="text-xs font-black text-rose-800 uppercase tracking-wider flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                    {group.cat}
+                  </h4>
+                  <div className="space-y-2.5">
+                    {group.items.map((itemName) => {
+                      const stat = analyticsStats.undRanking.find(d => d.item === itemName) || { count: 0, studentCount: 0, pctStudents: 0 };
+                      const maxUnd = Math.max(1, analyticsStats.undRanking[0]?.count || 1);
+                      const barPct = (stat.count / maxUnd) * 100;
+                      return (
+                        <div
+                          key={itemName}
+                          onClick={() => {
+                            setSpecificItemFilter(itemName);
+                            setSubView('records');
+                          }}
+                          className="bg-white p-3.5 rounded-xl border border-rose-100 hover:border-rose-300 hover:shadow-xs transition cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between text-xs font-bold text-slate-700 mb-1.5">
+                            <span className="flex items-center gap-1.5">
+                              <AlertCircle size={14} className="text-rose-500 shrink-0" />
+                              {itemName}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-rose-600 font-black">{stat.count} ครั้ง</span>
+                              <span className="text-[10px] bg-rose-50 text-rose-600 px-2 py-0.5 rounded-full border border-rose-200">
+                                {stat.studentCount} คน ({stat.pctStudents}%)
+                              </span>
+                            </div>
+                          </div>
+                          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-rose-500 rounded-full transition-all duration-500" style={{ width: `${stat.count === 0 ? 0 : Math.max(4, barPct)}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================
+          VIEW 4: เปรียบเทียบรายสังกัด/โรงเรียน/ชุมชน (AFFILIATION BREAKDOWN)
+          ========================================================= */}
+      {subView === 'affiliations' && (
+        <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+          <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="font-black text-base text-slate-800 flex items-center gap-2">
+                <Layers size={18} className="text-emerald-600" />
+                ตารางเปรียบเทียบผลการประเมินพฤติกรรมเชิงบวก-เชิงลบ แยกตามสังกัด
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">คลิกที่ชื่อสังกัดเพื่อกรองดูรายการประเมินเฉพาะหน่วยงานนั้น</p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[980px]">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs font-bold">
+                <tr>
+                  <th className="p-4 pl-6">หน่วยงาน / สถานศึกษา / ชุมชน</th>
+                  <th className="p-4 text-center">โมเดล / อำเภอ</th>
+                  <th className="p-4 text-center">ผู้รับการประเมิน (คน)</th>
+                  <th className="p-4 text-center">จำนวนครั้ง</th>
+                  <th className="p-4 text-center text-teal-700">รวมเชิงบวก (ข้อ)</th>
+                  <th className="p-4 text-center text-rose-600">รวมเชิงลบ (ข้อ)</th>
+                  <th className="p-4">พฤติกรรมเชิงบวกเด่นสุด</th>
+                  <th className="p-4 pr-6">พฤติกรรมเฝ้าระวังสูงสุด</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-sm">
+                {affiliationStats.map((row) => (
+                  <tr key={row.affiliation} className="hover:bg-slate-50/70 transition-colors">
+                    <td className="p-4 pl-6">
+                      <button
+                        onClick={() => {
+                          setSelectedAffiliation(row.affiliation);
+                          setSubView('records');
+                        }}
+                        className="font-bold text-slate-800 hover:text-emerald-600 hover:underline text-left"
+                      >
+                        {row.affiliation}
+                      </button>
+                    </td>
+                    <td className="p-4 text-center">
+                      <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full mr-1">{row.model}</span>
+                      <span className="text-xs text-slate-500">อ.{row.district}</span>
+                    </td>
+                    <td className="p-4 text-center">
+                      <span className="font-black text-slate-800">{row.evaluatedStudents}</span>
+                      <span className="text-xs text-slate-400"> / {row.totalStudents} คน ({row.coveragePct}%)</span>
+                    </td>
+                    <td className="p-4 text-center font-bold text-purple-700">{row.totalAssessments}</td>
+                    <td className="p-4 text-center">
+                      <span className="px-2.5 py-1 rounded-lg bg-teal-50 text-teal-700 font-black text-xs border border-teal-200">
+                        +{row.desSum}
+                      </span>
+                    </td>
+                    <td className="p-4 text-center">
+                      <span className="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 font-black text-xs border border-rose-200">
+                        -{row.undSum} ({row.riskStudentsCount} คน)
+                      </span>
+                    </td>
+                    <td className="p-4 text-xs font-semibold text-teal-700">{row.topDesirable}</td>
+                    <td className="p-4 pr-6 text-xs font-semibold text-rose-600">{row.topUndesirable}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================
+          MODAL: เจาะลึกรายละเอียดการประเมินพฤติกรรมรายบุคคล (INSPECTOR MODAL)
+          ========================================================= */}
+      {inspectedStudentProfile && inspectedRecord && (
+        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-4xl rounded-[2.5rem] shadow-2xl border border-slate-100 p-6 md:p-8 space-y-6 max-h-[92vh] overflow-y-auto custom-scrollbar">
+            {/* Modal Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center font-black text-2xl shadow-md">
+                  {inspectedStudentProfile.studentName.charAt(0)}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xl font-black text-slate-800">{inspectedStudentProfile.studentName}</h3>
+                    <span className="text-xs font-mono text-slate-400">@{inspectedStudentProfile.studentId}</span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full border border-indigo-100">
+                      📍 {inspectedStudentProfile.affiliation} ({inspectedStudentProfile.model} • อ.{inspectedStudentProfile.district})
+                    </span>
+                    {inspectedRecord.linkedSt5Status && (
+                      <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full border ${inspectedRecord.linkedSt5Status.color}`}>
+                        ST-5 อ้างอิง: {inspectedRecord.linkedSt5Score}/15 ({inspectedRecord.linkedSt5Status.level})
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setInspectingStudentId(null);
+                  setInspectingRecordId(null);
+                }}
+                className="self-end sm:self-auto p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition"
+              >
+                <XCircle size={28} />
+              </button>
+            </div>
+
+            {/* Round Selector Bar (กรณีประเมินหลายครั้ง) */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-slate-500 mr-1">เลือกรอบการประเมินพฤติกรรม:</span>
+                {inspectedStudentProfile.records.map((r: any) => (
+                  <button
+                    key={r.id}
+                    onClick={() => setInspectingRecordId(r.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                      inspectedRecord.id === r.id
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    ครั้งที่ {r.roundNumber} ({r.timestamp ? new Date(r.timestamp).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: '2-digit' }) : '-'})
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs font-bold text-slate-400">
+                บันทึกเมื่อ: {inspectedRecord.timestamp ? new Date(inspectedRecord.timestamp).toLocaleString('th-TH') : '-'}
+              </span>
+            </div>
+
+            {/* Detailed Category Checklist Comparison (Positive vs Negative) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* พฤติกรรมเชิงบวกครบ 4 หมวด */}
+              <div className="bg-teal-50/40 p-5 rounded-3xl border border-teal-200/80 space-y-4">
+                <div className="flex items-center justify-between border-b border-teal-200/60 pb-3">
+                  <h4 className="font-black text-sm text-teal-800 flex items-center gap-2">
+                    <CheckCircle2 size={18} className="text-teal-600" />
+                    พฤติกรรมเชิงบวก (พึงประสงค์)
+                  </h4>
+                  <span className="px-2.5 py-0.5 rounded-full bg-teal-600 text-white font-black text-xs">
+                    พบ {inspectedRecord.desCount} / 10 ข้อ
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {behaviors.desirable.map((cat, idx) => (
+                    <div key={idx} className="bg-white p-3.5 rounded-2xl border border-teal-100 space-y-2">
+                      <p className="text-xs font-black text-slate-700">{cat.cat}</p>
+                      <div className="space-y-1.5">
+                        {cat.items.map((item) => {
+                          const isChecked = inspectedRecord.desirable.includes(item);
+                          return (
+                            <div
+                              key={item}
+                              className={`flex items-center justify-between px-3 py-1.5 rounded-xl text-xs font-bold border ${
+                                isChecked
+                                  ? 'bg-teal-50 text-teal-800 border-teal-300'
+                                  : 'bg-slate-50/60 text-slate-400 border-slate-100'
+                              }`}
+                            >
+                              <span className="flex items-center gap-2">
+                                {isChecked ? <CheckCircle2 size={14} className="text-teal-600 shrink-0" /> : <Minus size={14} className="text-slate-300 shrink-0" />}
+                                {item}
+                              </span>
+                              {isChecked && <span className="text-[10px] font-black text-teal-600">✓ ตรวจพบ</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* พฤติกรรมเชิงลบครบ 5 หมวด */}
+              <div className="bg-rose-50/40 p-5 rounded-3xl border border-rose-200/80 space-y-4">
+                <div className="flex items-center justify-between border-b border-rose-200/60 pb-3">
+                  <h4 className="font-black text-sm text-rose-800 flex items-center gap-2">
+                    <AlertCircle size={18} className="text-rose-600" />
+                    พฤติกรรมเชิงลบ (ต้องเฝ้าระวัง)
+                  </h4>
+                  <span className="px-2.5 py-0.5 rounded-full bg-rose-600 text-white font-black text-xs">
+                    พบ {inspectedRecord.undCount} / 10 ข้อ
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {behaviors.undesirable.map((cat, idx) => (
+                    <div key={idx} className="bg-white p-3.5 rounded-2xl border border-rose-100 space-y-2">
+                      <p className="text-xs font-black text-slate-700">{cat.cat}</p>
+                      <div className="space-y-1.5">
+                        {cat.items.map((item) => {
+                          const isChecked =
+                            inspectedRecord.undesirable.includes(item) ||
+                            (item === 'ภาวะซึมเครียดและวิตกกังวล' && inspectedRecord.undesirable.includes('ภาวะซึมเศร้าและวิตกกังวล'));
+                          return (
+                            <div
+                              key={item}
+                              className={`flex items-center justify-between px-3 py-1.5 rounded-xl text-xs font-bold border ${
+                                isChecked
+                                  ? 'bg-rose-50 text-rose-800 border-rose-300'
+                                  : 'bg-slate-50/60 text-slate-400 border-slate-100'
+                              }`}
+                            >
+                              <span className="flex items-center gap-2">
+                                {isChecked ? <AlertCircle size={14} className="text-rose-600 shrink-0" /> : <Minus size={14} className="text-slate-300 shrink-0" />}
+                                {item}
+                              </span>
+                              {isChecked && <span className="text-[10px] font-black text-rose-600">! เฝ้าระวัง</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* ข้อเสนอแนะและแนวทางปฏิบัติการ */}
+            <div className="bg-indigo-50/60 p-5 rounded-3xl border border-indigo-100 space-y-2">
+              <p className="text-xs font-black text-indigo-800 flex items-center gap-2">
+                <Lightbulb size={16} className="text-indigo-600" />
+                บทสรุปและแนวทางดูแลช่วยเหลือ (Action Plan สำหรับ Superadmin & พี่เลี้ยง):
+              </p>
+              <p className="text-xs text-slate-700 leading-relaxed">
+                {inspectedRecord.undCount === 0
+                  ? `ผู้รับการประเมินมีจุดแข็งเชิงบวก ${inspectedRecord.desCount} ด้าน และไม่พบพฤติกรรมเสี่ยง ควรส่งเสริมให้เป็นแกนนำเยาวชน (Peer Leader) เพื่อสร้างแรงบันดาลใจในสถานศึกษา/ชุมชน`
+                  : `พบพฤติกรรมที่ต้องเฝ้าระวัง ${inspectedRecord.undCount} ด้าน (${inspectedRecord.undesirable.join(', ')}) ควบคู่กับจุดแข็งเชิงบวก ${inspectedRecord.desCount} ด้าน ควรใช้จุดแข็งที่มีเป็นฐานในการปรับเปลี่ยนพฤติกรรมเชิงบวก (Positive Behavioral Intervention) และติดตามประเมินซ้ำอย่างใกล้ชิด`}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                onClick={() => {
+                  setInspectingStudentId(null);
+                  setInspectingRecordId(null);
+                }}
+                className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-2xl text-xs transition"
+              >
+                ปิดหน้าต่างรายละเอียด
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // SUPERADMIN DASHBOARD
 
 // ==========================================
 function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, triggerConfirm, triggerDownloadConsentPdf }) {
   const [editingUser, setEditingUser] = useState(null);
   const [selectedAffiliation, setSelectedAffiliation] = useState('all');
+  const [dashboardSection, setDashboardSection] = useState<'overview' | 'behavior_report'>('overview');
   
   const displayUsers = profile.id === 'rung' ? users : users.filter(u => Array.isArray(profile.affiliation) ? profile.affiliation.includes(u.affiliation) : u.affiliation === profile.affiliation);
   const pendingAdmins = displayUsers.filter(u => u.role === 'admin' && u.status === 'pending');
@@ -4401,6 +6035,48 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
 
   return (
     <div className="space-y-6 md:space-y-8">
+      {/* 🟢 แถบสลับโหมดสำหรับ Superadmin ในหน้าภาพรวมระบบ */}
+      <div className="bg-white p-3 rounded-3xl shadow-sm border border-slate-100 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setDashboardSection('overview')}
+            className={`px-5 py-2.5 rounded-2xl text-xs md:text-sm font-bold transition-all flex items-center gap-2 ${
+              dashboardSection === 'overview'
+                ? 'bg-purple-600 text-white shadow-md shadow-purple-200'
+                : 'bg-slate-50 text-slate-600 hover:bg-purple-50 hover:text-purple-700'
+            }`}
+          >
+            <LayoutDashboard size={17} />
+            ภาพรวมการติดตาม ST-5 & จัดการผู้ใช้งาน
+          </button>
+          <button
+            onClick={() => setDashboardSection('behavior_report')}
+            className={`px-5 py-2.5 rounded-2xl text-xs md:text-sm font-bold transition-all flex items-center gap-2 ${
+              dashboardSection === 'behavior_report'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-200'
+                : 'bg-emerald-50/70 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+            }`}
+          >
+            <ClipboardList size={17} />
+            รายงานรายละเอียดการประเมินพฤติกรรม (เชิงบวก - เชิงลบ)
+          </button>
+        </div>
+        <span className="text-[11px] font-bold text-slate-400 px-3 hidden sm:inline">
+          ข้อมูลพฤติกรรมในระบบทั้งหมด: <strong className="text-emerald-600">{behaviorData.length} รายการ</strong>
+        </span>
+      </div>
+
+      {dashboardSection === 'behavior_report' ? (
+        <SuperAdminBehaviorReportDashboard
+          users={users}
+          st5Data={st5Data}
+          behaviorData={behaviorData}
+          profile={profile}
+          triggerAlert={triggerAlert}
+          triggerConfirm={triggerConfirm}
+        />
+      ) : (
+        <>
       {/* 🟢 Popup Modal สำหรับแก้ไขข้อมูลผู้ใช้งาน */}
       {editingUser && (
         <EditUserModal 
@@ -4518,6 +6194,8 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
           );
         })}
       </div>
+      </>
+      )}
     </div>
   );
 }
