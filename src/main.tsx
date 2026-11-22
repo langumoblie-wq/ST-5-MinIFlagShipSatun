@@ -9,8 +9,9 @@ import '@fontsource/kanit/500.css';
 import '@fontsource/kanit/600.css';
 import '@fontsource/kanit/700.css';
 
-
-createRoot(document.getElementById('root')!).render(
+// Mental Care App Entry (PDPA Privacy Toggle + ST-5 Analytics v2026.11)
+const rootEl = document.getElementById('root')!;
+createRoot(rootEl).render(
   <StrictMode>
     <App />
   </StrictMode>,

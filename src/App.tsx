@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, createContext, useContext } from 'react';
 import { toPng } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 
@@ -9,7 +9,7 @@ import {
   HeartPulse, Smile, Sparkles, ClipboardList, LayoutDashboard, UserSquare2, Star,
   ShieldAlert, Lightbulb, UserCheck, HelpCircle, BarChart2, Layers, RefreshCw, Database, Download, Terminal,
   Brain, Gamepad2, Zap, ShieldOff, Footprints, Flame, Bot, Printer, X, Trophy, Target, Pencil, Filter, ChevronDown, ChevronUp, TrendingDown, Minus,
-  Search, Calendar, ArrowRight, History, ChevronLeft, ChevronsLeft, ChevronsRight
+  Search, Calendar, ArrowRight, History, ChevronLeft, ChevronsLeft, ChevronsRight, Eye, EyeOff
 } from 'lucide-react';
 
 import { GAS_URL, gasRequest, getFirestore, doc, setDoc, getDoc, getDocs, onSnapshot, addDoc, updateDoc, deleteDoc, collection } from './lib/gasDb';
@@ -19,7 +19,74 @@ import {
   PieChart as RechartsPieChart, Pie
 } from 'recharts';
 
+// --- Privacy / Name Masking Helper & Context (ระบบซ่อนชื่อ-นามสกุล PDPA) ---
+const splitGraphemes = (str: string): string[] => {
+  if (!str) return [];
+  try {
+    if (typeof Intl !== 'undefined' && (Intl as any).Segmenter) {
+      const segmenter = new (Intl as any).Segmenter('th', { granularity: 'grapheme' });
+      return Array.from(segmenter.segment(str), (s: any) => s.segment);
+    }
+  } catch (e) {
+    // Fallback below
+  }
+  return Array.from(str);
+};
 
+const leadingThaiVowels = new Set(['เ', 'แ', 'โ', 'ไ', 'ใ']);
+const honorificPrefixes = new Set(['นาย', 'นาง', 'นางสาว', 'ด.ช.', 'ด.ญ.', 'ครู', 'ดร.', 'ผอ.']);
+
+const maskFullName = (fullName: any, shouldMask: boolean = true): string => {
+  if (!shouldMask || !fullName) return String(fullName || '');
+  const trimmed = String(fullName).trim();
+  if (!trimmed) return '';
+
+  const parts = trimmed.split(/\s+/);
+  return parts
+    .map((part, idx) => {
+      if (idx === 0 && honorificPrefixes.has(part) && parts.length > 1) {
+        return part;
+      }
+      const clusters = splitGraphemes(part);
+      if (clusters.length <= 1) return `${part}***`;
+      const keepCount = leadingThaiVowels.has(clusters[0]) && clusters.length >= 2 ? 2 : 1;
+      return `${clusters.slice(0, keepCount).join('')}***`;
+    })
+    .join(' ');
+};
+
+const PrivacyContext = createContext<{
+  hideNames: boolean;
+  toggleHideNames: () => void;
+  maskName: (name: any) => string;
+}>({
+  hideNames: false,
+  toggleHideNames: () => {},
+  maskName: (name: any) => String(name || '')
+});
+
+function PrivacyToggleButton({ className = '', compact = false }: { className?: string; compact?: boolean }) {
+  const { hideNames, toggleHideNames } = useContext(PrivacyContext);
+  return (
+    <button
+      type="button"
+      onClick={toggleHideNames}
+      title={hideNames ? 'คลิกเพื่อแสดงชื่อ-นามสกุลจริง' : 'คลิกเพื่อซ่อนชื่อ-นามสกุล (โหมดความเป็นส่วนตัว / PDPA)'}
+      className={`inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none border shrink-0 shadow-2xs ${
+        hideNames
+          ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600 shadow-amber-200/70 ring-2 ring-amber-300/40'
+          : 'bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-200'
+      } ${className}`}
+    >
+      {hideNames ? <Eye size={15} /> : <EyeOff size={15} />}
+      <span>
+        {hideNames
+          ? (compact ? 'แสดงชื่อจริง' : 'แสดงชื่อ-นามสกุลจริง')
+          : (compact ? 'ซ่อนชื่อ (PDPA)' : 'ซ่อนชื่อ-นามสกุล (PDPA)')}
+      </span>
+    </button>
+  );
+}
 
 // --- Firebase Initialization ---
 
@@ -256,6 +323,42 @@ export default function App() {
   const [st5Data, setSt5Data] = useState([]);
   const [behaviorData, setBehaviorData] = useState([]);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [hideNames, setHideNames] = useState(false);
+
+  const toggleHideNames = () => setHideNames(prev => !prev);
+
+  const displayProfile = useMemo(() => {
+    if (!profile) return null;
+    return {
+      ...profile,
+      rawName: profile.rawName || profile.name,
+      name: hideNames ? maskFullName(profile.rawName || profile.name, true) : (profile.rawName || profile.name)
+    };
+  }, [profile, hideNames]);
+
+  const displayUsersList = useMemo(() => {
+    return (usersList || []).map((u: any) => ({
+      ...u,
+      rawName: u.rawName || u.name,
+      name: hideNames ? maskFullName(u.rawName || u.name, true) : (u.rawName || u.name)
+    }));
+  }, [usersList, hideNames]);
+
+  const displaySt5Data = useMemo(() => {
+    return (st5Data || []).map((s: any) => ({
+      ...s,
+      rawUserName: s.rawUserName || s.userName,
+      userName: hideNames ? maskFullName(s.rawUserName || s.userName, true) : (s.rawUserName || s.userName)
+    }));
+  }, [st5Data, hideNames]);
+
+  const displayBehaviorData = useMemo(() => {
+    return (behaviorData || []).map((b: any) => ({
+      ...b,
+      rawTargetName: b.rawTargetName || b.targetName,
+      targetName: hideNames ? maskFullName(b.rawTargetName || b.targetName, true) : (b.rawTargetName || b.targetName)
+    }));
+  }, [behaviorData, hideNames]);
   
   // Custom Modals State
   const [alertConfig, setAlertConfig] = useState({ isOpen: false, message: '', type: 'success' });
@@ -401,10 +504,11 @@ export default function App() {
   }
 
   return (
+    <PrivacyContext.Provider value={{ hideNames, toggleHideNames, maskName: (n: any) => maskFullName(n, hideNames) }}>
     <div style={{fontFamily: "'Kanit', sans-serif"}} className="min-h-screen bg-[#fdfbf7] flex flex-col md:flex-row font-kanit text-slate-700">
       
       {/* Sidebar */}
-      <div className="w-full md:w-72 bg-white md:bg-white/80 backdrop-blur-xl md:h-screen flex flex-col shadow-[4px_0_24px_rgba(236,72,153,0.05)] z-20 border-r border-pink-50/50">
+      <div className="w-full md:w-64 xl:w-72 shrink-0 bg-white md:bg-white/80 backdrop-blur-xl md:h-screen flex flex-col shadow-[4px_0_24px_rgba(236,72,153,0.05)] z-20 border-r border-pink-50/50">
         <div className="p-5 md:p-8 flex items-center justify-between md:justify-start gap-4">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 bg-gradient-to-br from-pink-300 to-purple-400 rounded-2xl flex items-center justify-center shadow-lg shadow-pink-200 text-white transform -rotate-3">
@@ -415,9 +519,12 @@ export default function App() {
               <span className="text-[11px] md:text-xs font-medium text-purple-400">คัดกรองจิต & ประเมินพฤติกรรม</span>
             </div>
           </div>
-          <button onClick={handleLogout} className="md:hidden p-2 text-slate-400 hover:text-rose-400 bg-slate-50 rounded-full">
-            <LogOut size={20} />
-          </button>
+          <div className="flex items-center gap-2 md:hidden">
+            <PrivacyToggleButton compact />
+            <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-rose-400 bg-slate-50 rounded-full">
+              <LogOut size={20} />
+            </button>
+          </div>
         </div>
         
         <div className="hidden md:block mx-6 mb-6 p-5 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-3xl border border-white shadow-sm">
@@ -426,7 +533,7 @@ export default function App() {
               <Smile size={20}/>
             </div>
             <div className="overflow-hidden">
-              <p className="font-bold text-slate-700 truncate">{profile.name}</p>
+              <p className="font-bold text-slate-700 truncate">{displayProfile?.name}</p>
               <p className="text-[11px] text-slate-500 font-mono truncate">@{profile.id}</p>
             </div>
           </div>
@@ -435,7 +542,7 @@ export default function App() {
               📍 {displayAffiliation(profile.affiliation)}
             </p>
           )}
-          <div className="mt-3 flex">
+          <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
              <span className={`px-3 py-1 text-[10px] font-bold rounded-full border ${
               profile.role === 'superadmin' ? 'bg-purple-100 text-purple-700 border-purple-200' : 
               profile.role === 'admin' ? 'bg-sky-100 text-sky-700 border-sky-200' : 'bg-teal-100 text-teal-700 border-teal-200'
@@ -447,10 +554,16 @@ export default function App() {
                profile.accountType === 'superadmin' ? 'พี่เลี้ยงโครงการ' : profile.role}
             </span>
           </div>
+          <div className="mt-3 pt-3 border-t border-purple-100/70">
+            <PrivacyToggleButton className="w-full py-2" />
+          </div>
         </div>
 
         <nav className="flex-none md:flex-1 overflow-x-auto md:overflow-y-auto px-4 md:px-6 pb-4 md:pb-0 hide-scrollbar">
           <div className="flex flex-row md:flex-col gap-2 md:gap-3 min-w-max md:min-w-0">
+            {/* ปุ่มด่วน ซ่อน/แสดงชื่อ-นามสกุล (PDPA) ในแถบเมนูหลัก */}
+            <PrivacyToggleButton className="px-5 py-3.5 rounded-2xl text-sm md:text-base justify-start md:w-full" />
+
             <button 
               onClick={() => setActiveTab('dashboard')}
               className={`px-5 py-3.5 rounded-2xl flex items-center gap-3 transition-all font-medium text-sm md:text-base ${
@@ -552,7 +665,7 @@ export default function App() {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 p-4 md:p-8 lg:p-10 overflow-y-auto bg-slate-50/50">
+      <div className="flex-1 min-w-0 p-4 md:p-6 lg:p-8 overflow-y-auto bg-slate-50/50">
         {profile.status === 'pending' ? (
           <div className="bg-orange-50 p-10 rounded-[2.5rem] border border-orange-100 text-center shadow-sm max-w-md mx-auto mt-10 md:mt-20">
             <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-6 text-orange-400">
@@ -562,30 +675,59 @@ export default function App() {
             <p className="text-orange-600/80 leading-relaxed text-sm">บัญชีผู้ใช้งานของคุณกำลังรอการอนุมัติจากพี่เลี้ยงโครงการ โปรดรอสักครู่</p>
           </div>
         ) : (
-          <div className="max-w-7xl mx-auto space-y-6 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {activeTab === 'dashboard' && profile.role === 'user' && <UserDashboard users={usersList} profile={profile} st5Data={st5Data} behaviorData={behaviorData} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
-            {activeTab === 'dashboard' && profile.role === 'admin' && <AdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} triggerDownloadConsentPdf={triggerDownloadConsentPdf} />}
-            {activeTab === 'dashboard' && profile.role === 'superadmin' && <SuperAdminDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} triggerDownloadConsentPdf={triggerDownloadConsentPdf} />}
+          <div className="max-w-[1440px] mx-auto space-y-5 md:space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* 🟢 แถบควบคุมการซ่อน/แสดงชื่อ-นามสกุลส่วนกลาง (PDPA Privacy Bar - แสดงทุกหน้า) */}
+            <div className="no-print bg-white/95 backdrop-blur-md px-4 py-3 md:px-6 md:py-3.5 rounded-2xl shadow-xs border border-purple-100 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${hideNames ? 'bg-amber-100 text-amber-600' : 'bg-purple-100 text-purple-600'}`}>
+                  {hideNames ? <EyeOff size={17} /> : <ShieldCheck size={17} />}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs md:text-sm font-black text-slate-800">
+                      ระบบคุ้มครองข้อมูลส่วนบุคคล (PDPA Privacy Mode)
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      hideNames
+                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    }`}>
+                      {hideNames ? 'สถานะ: กำลังซ่อนชื่อ-นามสกุล (ก*** ท***)' : 'สถานะ: แสดงชื่อ-นามสกุลปกติ'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <PrivacyToggleButton />
+            </div>
+
+            {activeTab === 'dashboard' && profile.role === 'user' && <UserDashboard users={displayUsersList} profile={displayProfile} st5Data={displaySt5Data} behaviorData={displayBehaviorData} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />}
+            {activeTab === 'dashboard' && profile.role === 'admin' && <AdminDashboard users={displayUsersList} st5Data={displaySt5Data} behaviorData={displayBehaviorData} profile={displayProfile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} triggerDownloadConsentPdf={triggerDownloadConsentPdf} />}
+            {activeTab === 'dashboard' && profile.role === 'superadmin' && <SuperAdminDashboard users={displayUsersList} st5Data={displaySt5Data} behaviorData={displayBehaviorData} profile={displayProfile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} triggerDownloadConsentPdf={triggerDownloadConsentPdf} />}
             {activeTab === 'behavior_report' && profile.role === 'superadmin' && (
-              <SuperAdminBehaviorReportDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />
+              <SuperAdminBehaviorReportDashboard users={displayUsersList} st5Data={displaySt5Data} behaviorData={displayBehaviorData} profile={displayProfile} triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} />
             )}
             {activeTab === 'analytics' && (profile.role === 'admin' || profile.role === 'superadmin') && (
-              <ExecutiveAnalyticsDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} />
+              <ExecutiveAnalyticsDashboard users={displayUsersList} st5Data={displaySt5Data} behaviorData={displayBehaviorData} profile={displayProfile} />
             )}
             {activeTab === 'project_report' && (profile.role === 'admin' || profile.role === 'superadmin') && (
-              <ProjectReportDashboard users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} />
+              <ProjectReportDashboard users={displayUsersList} st5Data={displaySt5Data} behaviorData={displayBehaviorData} profile={displayProfile} />
             )}
             {activeTab === 'executive_report' && profile.role === 'superadmin' && (
-              <ExecutiveSummaryReport users={usersList} st5Data={st5Data} behaviorData={behaviorData} profile={profile} />
+              <ExecutiveSummaryReport users={displayUsersList} st5Data={displaySt5Data} behaviorData={displayBehaviorData} profile={displayProfile} />
             )}
             {activeTab === 'sync' && profile.role === 'superadmin' && profile.id === 'rung' && (
               <SyncDashboard triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} st5Data={st5Data} behaviorData={behaviorData} />
             )}
             {activeTab === 'import' && profile.role === 'superadmin' && profile.id === 'rung' && (
-              <ImportDashboard triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} profile={profile} />
+              <ImportDashboard triggerAlert={triggerAlert} triggerConfirm={triggerConfirm} profile={displayProfile} />
             )}
           </div>
         )}
+      </div>
+
+      {/* ปุ่มลอยด่วน (Floating PDPA Privacy Toggle) แสดงทุกหน้าจอสำหรับ Admin / Superadmin / User */}
+      <div className="fixed bottom-5 right-5 z-50 no-print">
+        <PrivacyToggleButton className="px-4 py-3 rounded-2xl shadow-xl border-2 text-xs md:text-sm" />
       </div>
 
       {/* Reusable Cute Modals Overlay */}
@@ -632,6 +774,7 @@ export default function App() {
         </div>
       )}
     </div>
+    </PrivacyContext.Provider>
   );
 }
 
@@ -1536,12 +1679,12 @@ function UserDashboard({ users, profile, st5Data, behaviorData, triggerAlert, tr
       .filter((d: any) => {
         const pId = String(profile?.id || '').trim().toLowerCase();
         const pUsername = String(profile?.username || '').trim().toLowerCase();
-        const pName = String(profile?.name || '').trim().toLowerCase();
+        const pName = String(profile?.rawName || profile?.name || '').trim().toLowerCase();
         
         const dUid = String(d.uid || '').trim().toLowerCase();
         const dUserId = String(d.userId || '').trim().toLowerCase();
         const dUsername = String(d.username || '').trim().toLowerCase();
-        const dUserName = String(d.userName || '').trim().toLowerCase();
+        const dUserName = String(d.rawUserName || d.userName || '').trim().toLowerCase();
         const dName = String(d.name || '').trim().toLowerCase();
 
         return (
@@ -1555,7 +1698,7 @@ function UserDashboard({ users, profile, st5Data, behaviorData, triggerAlert, tr
 
   const handleSubmitST5 = async (answers, score) => {
     const st5Obj = calculateST5(score);
-    const payload = { uid: profile.id, userId: profile.id, userName: profile.name, answers, score, level: st5Obj.level, timestamp: editingST5 ? editingST5.timestamp : Date.now(), suggestion: editingST5 ? editingST5.suggestion : '' };
+    const payload = { uid: profile.id, userId: profile.id, userName: profile.rawName || profile.name, answers, score, level: st5Obj.level, timestamp: editingST5 ? editingST5.timestamp : Date.now(), suggestion: editingST5 ? editingST5.suggestion : '' };
     
     if (editingST5) {
        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', editingST5.id), payload);
@@ -1575,9 +1718,12 @@ function UserDashboard({ users, profile, st5Data, behaviorData, triggerAlert, tr
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
         <div>
-          <h2 className="text-2xl md:text-3xl font-extrabold text-slate-800 tracking-tight flex items-center gap-3">
-             <Star className="text-amber-400 fill-amber-400" size={28}/> พื้นที่ของฉัน
-          </h2>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="text-2xl md:text-3xl font-extrabold text-slate-800 tracking-tight flex items-center gap-3">
+               <Star className="text-amber-400 fill-amber-400" size={28}/> พื้นที่ของฉัน
+            </h2>
+            <PrivacyToggleButton />
+          </div>
           <p className="text-slate-500 text-sm mt-1">ยินดีต้อนรับกลับมานะ สำรวจสุขภาพใจของคุณกันเถอะ</p>
         </div>
         
@@ -1954,6 +2100,12 @@ function FollowUpTrackerView({
     let countR2 = 0;
     let countR3Plus = 0;
     let countImproved = 0;
+    const latestRiskCounts: Record<'Low' | 'Medium' | 'High' | 'Severe', number> = {
+      Low: 0,
+      Medium: 0,
+      High: 0,
+      Severe: 0
+    };
 
     const targetStudents = (selectedAffiliation && selectedAffiliation !== 'all')
       ? students.filter(s => matchAffiliation(s.affiliation, selectedAffiliation))
@@ -1969,6 +2121,14 @@ function FollowUpTrackerView({
       if (totalRounds >= 1) countR1++;
       if (totalRounds >= 2) countR2++;
       if (totalRounds >= 3) countR3Plus++;
+
+      // คำนวณระดับความเครียด ST-5 ล่าสุดของนักเรียนคนนี้ (Latest ST-5 Stress Level)
+      const latestSt5Record = totalRounds > 0 ? userSt5[totalRounds - 1] : null;
+      const latestScore = latestSt5Record ? (parseInt(latestSt5Record.score) || 0) : null;
+      const latestStatus = latestScore !== null ? calculateST5(latestScore) : null;
+      if (latestStatus?.risk && latestStatus.risk in latestRiskCounts) {
+        latestRiskCounts[latestStatus.risk as 'Low' | 'Medium' | 'High' | 'Severe']++;
+      }
 
       // ดึงพฤติกรรมของนักเรียนคนนี้
       const userBehaviors = behaviorData.filter(d => 
@@ -1999,7 +2159,9 @@ function FollowUpTrackerView({
           postDate: getSafeTimestamp(postTest.timestamp),
           interventions: positiveBehaviors.length,
           preStatus: calculateST5(preScore),
-          postStatus: calculateST5(postScore)
+          postStatus: calculateST5(postScore),
+          latestScore: postScore,
+          latestStatus: calculateST5(postScore)
         });
       }
 
@@ -2037,6 +2199,8 @@ function FollowUpTrackerView({
           timestamp: st5Ts,
           score: currentScore,
           status,
+          latestScore,
+          latestStatus,
           prevScore,
           diffFromPrev,
           positiveCount: linkedBehaviors.length,
@@ -2059,7 +2223,8 @@ function FollowUpTrackerView({
         countR3Plus,
         countImproved,
         retentionRate,
-        successRate
+        successRate,
+        latestRiskCounts
       }
     };
   }, [students, st5Data, behaviorData, selectedAffiliation]);
@@ -2080,7 +2245,7 @@ function FollowUpTrackerView({
       // ค้นหาชื่อ รหัส หรือสังกัด
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchName = item.student?.name && String(item.student.name).toLowerCase().includes(q);
+        const matchName = (item.student?.name && String(item.student.name).toLowerCase().includes(q)) || (item.student?.rawName && String(item.student.rawName).toLowerCase().includes(q));
         const matchId = item.student?.id && String(item.student.id).toLowerCase().includes(q);
         const matchStudentId = item.student?.studentId && String(item.student.studentId).toLowerCase().includes(q);
         const matchAff = item.student?.affiliation && String(item.student.affiliation).toLowerCase().includes(q);
@@ -2114,9 +2279,10 @@ function FollowUpTrackerView({
         if (item.diffFromPrev === null || item.diffFromPrev <= 0) return false;
       }
 
-      // กรองระดับความเสี่ยง ST-5
+      // กรองตามระดับความเครียด ST-5 ล่าสุดของนักเรียน (Latest ST-5 Stress Level: Low, Medium, High, Severe)
       if (selectedRisk !== 'all') {
-        if (!isMatchingRisk(item.status?.risk, selectedRisk)) return false;
+        const studentLatestRisk = item.latestStatus?.risk || item.status?.risk;
+        if (!isMatchingRisk(studentLatestRisk, selectedRisk)) return false;
       }
 
       return true;
@@ -2129,7 +2295,7 @@ function FollowUpTrackerView({
       // ค้นหาชื่อ รหัส หรือสังกัด
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchName = item.student?.name && String(item.student.name).toLowerCase().includes(q);
+        const matchName = (item.student?.name && String(item.student.name).toLowerCase().includes(q)) || (item.student?.rawName && String(item.student.rawName).toLowerCase().includes(q));
         const matchId = item.student?.id && String(item.student.id).toLowerCase().includes(q);
         const matchStudentId = item.student?.studentId && String(item.student.studentId).toLowerCase().includes(q);
         const matchAff = item.student?.affiliation && String(item.student.affiliation).toLowerCase().includes(q);
@@ -2159,9 +2325,10 @@ function FollowUpTrackerView({
         if (item.totalRounds < 4) return false;
       }
 
-      // กรองระดับความเสี่ยงรอบล่าสุด
+      // กรองระดับความเสี่ยง ST-5 รอบล่าสุด (Latest ST-5 Stress Level: Low, Medium, High, Severe)
       if (selectedRisk !== 'all') {
-        if (!isMatchingRisk(item.postStatus?.risk, selectedRisk)) return false;
+        const studentLatestRisk = item.latestStatus?.risk || item.postStatus?.risk;
+        if (!isMatchingRisk(studentLatestRisk, selectedRisk)) return false;
       }
 
       return true;
@@ -2192,143 +2359,180 @@ function FollowUpTrackerView({
   const isFilterActive = selectedRound !== 'all' || selectedTrend !== 'all' || selectedRisk !== 'all' || searchQuery.trim() !== '';
 
   return (
-    <div className="space-y-6">
-      {/* 🟢 หัวข้อและแถบเลือกสังกัด (สำหรับ SuperAdmin / Admin) */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-        <div className="flex items-center gap-4 min-w-0 flex-1">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-purple-500/20 shrink-0">
-            <History size={28} />
+    <div className="space-y-5">
+      {/* 🟢 หัวข้อและแถบเลือกสังกัด + ตัวกรองระดับความเครียด ST-5 ล่าสุด (สำหรับ SuperAdmin / Admin) */}
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white p-5 md:p-6 rounded-[2rem] shadow-sm border border-slate-100">
+        <div className="flex items-start sm:items-center gap-3.5 min-w-0 flex-1">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-purple-500/20 shrink-0">
+            <History size={24} />
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="text-xl md:text-2xl font-black text-slate-800 break-words leading-tight">{title}</h2>
-            <p className="text-xs md:text-sm text-slate-500 font-medium mt-1 leading-relaxed">{subtitle}</p>
+            <h2 className="text-lg md:text-xl font-black text-slate-800 leading-snug">{title}</h2>
+            <p className="text-xs text-slate-500 font-medium mt-0.5 leading-relaxed">{subtitle}</p>
           </div>
         </div>
 
-        {/* ตัวเลือกสังกัด */}
-        {availableAffiliations && availableAffiliations.length > 0 && onAffiliationChange && (
-          <div className="flex items-center gap-2.5 self-start lg:self-auto shrink-0 bg-slate-50 p-2.5 rounded-2xl border border-slate-200 w-full sm:w-auto">
-            <span className="text-xs font-bold text-slate-500 pl-1.5 shrink-0 whitespace-nowrap">สังกัด:</span>
+        {/* ตัวเลือกกรองระดับความเครียด ST-5 ล่าสุด, ตัวเลือกสังกัด & ปุ่มซ่อนชื่อ-นามสกุล */}
+        <div className="flex flex-wrap items-center gap-2.5 self-start xl:self-auto shrink-0 w-full sm:w-auto">
+          <PrivacyToggleButton />
+
+          {/* Dropdown กรองระดับความเครียด ST-5 ล่าสุด (Low, Medium, High, Severe) */}
+          <div className="flex items-center gap-2 bg-purple-50/70 p-2 rounded-2xl border border-purple-100 flex-1 sm:flex-initial">
+            <span className="text-xs font-bold text-purple-700 pl-1.5 shrink-0 whitespace-nowrap flex items-center gap-1">
+              <HeartPulse size={14} className="text-purple-500" /> ST-5 ล่าสุด:
+            </span>
             <select
-              value={selectedAffiliation}
-              onChange={(e) => onAffiliationChange(e.target.value)}
-              className="bg-white px-3 py-2 rounded-xl text-xs font-bold text-slate-700 border border-slate-200 outline-none focus:ring-2 focus:ring-purple-400 w-full sm:w-auto sm:max-w-xs md:max-w-sm truncate shadow-xs"
+              value={selectedRisk}
+              onChange={(e) => setSelectedRisk(e.target.value)}
+              aria-label="กรองตามระดับความเครียด ST-5 ล่าสุด"
+              className="bg-white px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 border border-purple-200 outline-none focus:ring-2 focus:ring-purple-400 w-full sm:w-auto shadow-2xs cursor-pointer"
             >
-              <option value="all">ทุกสังกัด / ทุกโรงเรียน ({students.length} คน)</option>
-              {availableAffiliations.map((aff: any) => {
-                const affStr = Array.isArray(aff) ? aff.join(', ') : String(aff || '');
-                const count = students.filter(s => matchAffiliation(s.affiliation, aff)).length;
-                return (
-                  <option key={affStr} value={affStr}>
-                    {displayAffiliation(aff)} {count > 0 ? `(${count} คน)` : ''}
-                  </option>
-                );
-              })}
+              <option value="all">ทุกระดับความเครียด ({summaryStats.countR1} คน)</option>
+              <option value="Low">🟢 Low - เครียดน้อย 0-4 ({summaryStats.latestRiskCounts.Low} คน)</option>
+              <option value="Medium">🟡 Medium - เครียดปานกลาง 5-7 ({summaryStats.latestRiskCounts.Medium} คน)</option>
+              <option value="High">🟠 High - เครียดมาก 8-9 ({summaryStats.latestRiskCounts.High} คน)</option>
+              <option value="Severe">🔴 Severe - เครียดมากที่สุด 10-15 ({summaryStats.latestRiskCounts.Severe} คน)</option>
             </select>
           </div>
-        )}
+
+          {availableAffiliations && availableAffiliations.length > 0 && onAffiliationChange && (
+            <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-200 flex-1 sm:flex-initial">
+              <span className="text-xs font-bold text-slate-500 pl-1.5 shrink-0 whitespace-nowrap">สังกัด:</span>
+              <select
+                value={selectedAffiliation}
+                onChange={(e) => onAffiliationChange(e.target.value)}
+                className="bg-white px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 border border-slate-200 outline-none focus:ring-2 focus:ring-purple-400 w-full sm:w-auto sm:max-w-xs truncate shadow-2xs"
+              >
+                <option value="all">ทุกสังกัด / ทุกโรงเรียน ({students.length} คน)</option>
+                {availableAffiliations.map((aff: any) => {
+                  const affStr = Array.isArray(aff) ? aff.join(', ') : String(aff || '');
+                  const count = students.filter(s => matchAffiliation(s.affiliation, aff)).length;
+                  return (
+                    <option key={affStr} value={affStr}>
+                      {displayAffiliation(aff)} {count > 0 ? `(${count} คน)` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 🟢 การ์ดสรุปตัวชี้วัดความก้าวหน้าการติดตาม (Follow-up Funnel KPIs) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
         {/* KPI 1: ประเมินรอบแรก */}
-        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black shrink-0 border border-indigo-100">
-            <Users size={24} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs font-bold text-slate-400 truncate">ประเมินแรกเริ่ม (ครั้งที่ 1)</p>
-            <div className="flex items-baseline gap-2 mt-0.5">
-              <span className="text-2xl font-black text-slate-800">{summaryStats.countR1}</span>
-              <span className="text-[11px] text-slate-400 font-medium">/ {summaryStats.totalStudents} คน</span>
+        <div className="bg-white p-4 md:p-5 rounded-[1.75rem] shadow-sm border border-slate-100 flex flex-col justify-between gap-2.5 hover:border-indigo-200 transition-colors">
+          <div className="flex items-center justify-between gap-2">
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 border border-indigo-100">
+              <Users size={20} />
             </div>
-            <p className="text-[10px] text-indigo-500 font-bold mt-1">ฐานข้อมูลตั้งต้น (Baseline)</p>
+            <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50/80 px-2.5 py-0.5 rounded-full border border-indigo-100 whitespace-nowrap">
+              Baseline
+            </span>
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-600 leading-snug">ประเมินแรกเริ่ม (ครั้งที่ 1)</p>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-2xl md:text-3xl font-black text-slate-800">{summaryStats.countR1}</span>
+              <span className="text-xs text-slate-400 font-semibold">/ {summaryStats.totalStudents} คน</span>
+            </div>
+            <p className="text-[11px] text-indigo-500 font-semibold mt-1">ฐานข้อมูลตั้งต้นในระบบ</p>
           </div>
         </div>
 
         {/* KPI 2: ติดตามครั้งที่ 2 */}
-        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center font-black shrink-0 border border-sky-100">
-            <RefreshCw size={22} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs font-bold text-slate-400 truncate">ติดตามผล (ครั้งที่ 2)</p>
-            <div className="flex items-baseline gap-2 mt-0.5">
-              <span className="text-2xl font-black text-slate-800">{summaryStats.countR2}</span>
-              <span className="text-[11px] text-sky-600 font-bold bg-sky-50 px-2 py-0.5 rounded-full border border-sky-100">
-                {summaryStats.retentionRate}%
-              </span>
+        <div className="bg-white p-4 md:p-5 rounded-[1.75rem] shadow-sm border border-slate-100 flex flex-col justify-between gap-2.5 hover:border-sky-200 transition-colors">
+          <div className="flex items-center justify-between gap-2">
+            <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0 border border-sky-100">
+              <RefreshCw size={19} />
             </div>
-            <p className="text-[10px] text-slate-400 font-medium mt-1">อัตราติดตามต่อเนื่องระยะ 1</p>
+            <span className="text-[11px] text-sky-700 font-black bg-sky-50 px-2.5 py-0.5 rounded-full border border-sky-200 whitespace-nowrap">
+              {summaryStats.retentionRate}%
+            </span>
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-600 leading-snug">ติดตามผล (ครั้งที่ 2)</p>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-2xl md:text-3xl font-black text-slate-800">{summaryStats.countR2}</span>
+              <span className="text-xs text-slate-400 font-semibold">คน</span>
+            </div>
+            <p className="text-[11px] text-sky-600 font-semibold mt-1">อัตราติดตามต่อเนื่องระยะ 1</p>
           </div>
         </div>
 
         {/* KPI 3: ติดตาม 3 ครั้งขึ้นไป */}
-        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center font-black shrink-0 border border-purple-100">
-            <Layers size={22} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs font-bold text-slate-400 truncate">ติดตามต่อเนื่อง (3 ครั้ง+)</p>
-            <div className="flex items-baseline gap-2 mt-0.5">
-              <span className="text-2xl font-black text-slate-800">{summaryStats.countR3Plus}</span>
-              <span className="text-[11px] text-purple-600 font-bold bg-purple-50 px-2 py-0.5 rounded-full border border-purple-100">
-                คน
-              </span>
+        <div className="bg-white p-4 md:p-5 rounded-[1.75rem] shadow-sm border border-slate-100 flex flex-col justify-between gap-2.5 hover:border-purple-200 transition-colors">
+          <div className="flex items-center justify-between gap-2">
+            <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0 border border-purple-100">
+              <Layers size={19} />
             </div>
-            <p className="text-[10px] text-purple-500 font-bold mt-1">เฝ้าระวังและพัฒนาต่อเนื่อง</p>
+            <span className="text-[10px] text-purple-700 font-bold bg-purple-50 px-2.5 py-0.5 rounded-full border border-purple-200 whitespace-nowrap">
+              3 ครั้งขึ้นไป
+            </span>
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-600 leading-snug">ติดตามต่อเนื่อง (3 ครั้ง+)</p>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-2xl md:text-3xl font-black text-slate-800">{summaryStats.countR3Plus}</span>
+              <span className="text-xs text-slate-400 font-semibold">คน</span>
+            </div>
+            <p className="text-[11px] text-purple-600 font-semibold mt-1">เฝ้าระวังและพัฒนาต่อเนื่อง</p>
           </div>
         </div>
 
         {/* KPI 4: ผลลัพธ์พัฒนาดีขึ้น */}
-        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-black shrink-0 border border-teal-100">
-            <TrendingDown size={24} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs font-bold text-slate-400 truncate">สุขภาพจิตดีขึ้น (สำเร็จ)</p>
-            <div className="flex items-baseline gap-2 mt-0.5">
-              <span className="text-2xl font-black text-teal-600">{summaryStats.countImproved}</span>
-              <span className="text-[11px] text-teal-600 font-bold bg-teal-50 px-2 py-0.5 rounded-full border border-teal-100">
-                {summaryStats.successRate}%
-              </span>
+        <div className="bg-white p-4 md:p-5 rounded-[1.75rem] shadow-sm border border-slate-100 flex flex-col justify-between gap-2.5 hover:border-teal-200 transition-colors">
+          <div className="flex items-center justify-between gap-2">
+            <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0 border border-teal-100">
+              <TrendingDown size={20} />
             </div>
-            <p className="text-[10px] text-teal-600 font-medium mt-1">คะแนนความเครียดลดลง</p>
+            <span className="text-[11px] text-teal-700 font-black bg-teal-50 px-2.5 py-0.5 rounded-full border border-teal-200 whitespace-nowrap">
+              {summaryStats.successRate}%
+            </span>
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-600 leading-snug">สุขภาพจิตดีขึ้น (สำเร็จ)</p>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-2xl md:text-3xl font-black text-teal-600">{summaryStats.countImproved}</span>
+              <span className="text-xs text-slate-400 font-semibold">คน</span>
+            </div>
+            <p className="text-[11px] text-teal-600 font-semibold mt-1">คะแนนความเครียดลดลง</p>
           </div>
         </div>
       </div>
 
       {/* 🟢 แถบสลับมุมมอง (Tabs) และกล่องเครื่องมือฟิลเตอร์ (Toolbar) */}
-      <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-5">
+      <div className="bg-white p-5 md:p-6 rounded-[2rem] shadow-sm border border-slate-100 space-y-4">
         {/* แถบสลับ Tab และตัวแสดงจำนวนผลลัพธ์ */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-          <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-2xl self-start sm:self-auto">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+          <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-2xl">
             <button
               onClick={() => setActiveTab('rounds')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                 activeTab === 'rounds'
-                  ? 'bg-white text-purple-700 shadow-sm'
+                  ? 'bg-white text-purple-700 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Calendar size={16} />
+              <Calendar size={15} />
               จำแนกตามรายการติดตามครั้งที่ ({allRoundsData.length})
             </button>
             <button
               onClick={() => setActiveTab('comparison')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                 activeTab === 'comparison'
-                  ? 'bg-white text-purple-700 shadow-sm'
+                  ? 'bg-white text-purple-700 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <TrendingUp size={16} />
+              <TrendingUp size={15} />
               เปรียบเทียบผลสัมฤทธิ์ Pre vs Post ({comparisonData.length})
             </button>
           </div>
 
-          <div className="flex items-center gap-3 self-end sm:self-auto">
-            <span className="text-xs font-bold text-slate-500 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl">
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-xs font-bold text-slate-500 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl whitespace-nowrap">
               แสดงผล: <span className="text-purple-600 font-black">{totalCount}</span> รายการ
               {isFilterActive && <span className="text-slate-400 font-normal"> (จาก {activeTab === 'rounds' ? allRoundsData.length : comparisonData.length})</span>}
             </span>
@@ -2336,7 +2540,7 @@ function FollowUpTrackerView({
         </div>
 
         {/* ตัวกรอง (Filter Controls) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           {/* 1. ค้นหาชื่อ หรือ ID */}
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -2399,18 +2603,18 @@ function FollowUpTrackerView({
             </select>
           </div>
 
-          {/* 4. ฟิลเตอร์ระดับความเสี่ยง ST-5 */}
+          {/* 4. ฟิลเตอร์ระดับความเครียด ST-5 ล่าสุด (Latest ST-5 Stress Level: Low, Medium, High, Severe) */}
           <div>
             <select
               value={selectedRisk}
               onChange={(e) => setSelectedRisk(e.target.value)}
               className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-400"
             >
-              <option value="all">🎯 ทุกระดับความเครียด {activeTab === 'comparison' ? '(รอบล่าสุด)' : ''}</option>
-              <option value="Low">🟢 เครียดน้อย (ปกติ 0-4)</option>
-              <option value="Medium">🟡 เครียดปานกลาง (5-7)</option>
-              <option value="High">🟠 เครียดมาก (8-9)</option>
-              <option value="Severe">🔴 เครียดมากที่สุด (10-15)</option>
+              <option value="all">🎯 ระดับความเครียด ST-5 ล่าสุด (ทั้งหมด)</option>
+              <option value="Low">🟢 Low - เครียดน้อย (0-4 คะแนน) [{summaryStats.latestRiskCounts.Low} คน]</option>
+              <option value="Medium">🟡 Medium - เครียดปานกลาง (5-7 คะแนน) [{summaryStats.latestRiskCounts.Medium} คน]</option>
+              <option value="High">🟠 High - เครียดมาก (8-9 คะแนน) [{summaryStats.latestRiskCounts.High} คน]</option>
+              <option value="Severe">🔴 Severe - เครียดมากที่สุด (10-15 คะแนน) [{summaryStats.latestRiskCounts.Severe} คน]</option>
             </select>
           </div>
         </div>
@@ -2911,7 +3115,7 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
   // กรองผู้ใช้งานในสังกัด และจัดเรียงตามชื่อ ก-ฮ
   const students = users
     .filter(u => ['student', 'community', 'teacher'].includes(u.accountType) && u.affiliation === profile.affiliation)
-    .sort((a, b) => a.name.localeCompare(b.name, 'th'));
+    .sort((a, b) => String(a.rawName || a.name || '').localeCompare(String(b.rawName || b.name || ''), 'th'));
 
   // คำนวณจำนวนรอบสำหรับแต่ละคนเพื่อใช้ใน Filter Pills
   const countsStats = useMemo(() => {
@@ -2931,6 +3135,7 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
     return students.filter(u => {
       const matchSearch = 
         (u.name && String(u.name).toLowerCase().includes(searchQuery.toLowerCase())) || 
+        (u.rawName && String(u.rawName).toLowerCase().includes(searchQuery.toLowerCase())) ||
         (u.id && String(u.id).toLowerCase().includes(searchQuery.toLowerCase()));
       if (!matchSearch) return false;
 
@@ -2946,63 +3151,68 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
   const selectedUser = users.find(u => u.id === selectedUserId);
 
   return (
-    <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100vh-160px)]">
+    <div className="flex flex-col lg:flex-row gap-5 lg:h-[calc(100vh-110px)]">
       {/* 1. Sidebar แสดงรายชื่อ */}
-      <div className={`w-full lg:w-[420px] flex-shrink-0 flex flex-col gap-4 ${selectedUser ? 'hidden lg:flex' : 'flex'}`}>
+      <div className={`w-full lg:w-[340px] xl:w-[360px] flex-shrink-0 flex flex-col gap-3.5 ${selectedUser ? 'hidden lg:flex' : 'flex'}`}>
         <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 shrink-0">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><ClipboardList className="text-purple-400"/> รายชื่อในความดูแล</h2>
-            <span className="bg-purple-100 text-purple-700 text-xs font-bold px-3 py-1 rounded-full">ทั้งหมด {filteredStudents.length} รายการ</span>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <h2 className="text-lg xl:text-xl font-black text-slate-800 flex items-center gap-2"><ClipboardList className="text-purple-400 shrink-0" size={22}/> รายชื่อในความดูแล</h2>
+            <span className="bg-purple-100 text-purple-700 text-[11px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap">ทั้งหมด {filteredStudents.length} รายการ</span>
           </div>
-          <div className="flex flex-col gap-3">
-             <div className="inline-flex items-center gap-2 bg-purple-50 px-3 py-1.5 rounded-full border border-purple-100 self-start">
-               <span className="text-[10px] font-bold text-purple-400">สังกัด</span>
-               <span className="text-xs font-semibold text-purple-700">{profile.affiliation}</span>
+          <div className="flex flex-col gap-2.5">
+             <div className="flex items-center justify-between gap-2 flex-wrap">
+               <div className="inline-flex items-center gap-2 bg-purple-50 px-3 py-1 rounded-full border border-purple-100 max-w-full">
+                 <span className="text-[10px] font-bold text-purple-400 shrink-0">สังกัด</span>
+                 <span className="text-xs font-semibold text-purple-700 truncate">{profile.affiliation}</span>
+               </div>
              </div>
+
+             {/* ปุ่มซ่อน/แสดงชื่อ-นามสกุล (สำหรับ Admin) */}
+             <PrivacyToggleButton className="w-full py-2.5" />
              
              {/* Filter Input */}
-             <div className="relative mt-1">
+             <div className="relative mt-0.5">
                 <input 
                   type="text" 
                   placeholder="ค้นหารายชื่อ หรือ ID..." 
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-4 focus:ring-purple-500/20 focus:border-purple-400 outline-none transition-all font-medium text-slate-700"
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-4 focus:ring-purple-500/20 focus:border-purple-400 outline-none transition-all font-medium text-slate-700"
                 />
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
              </div>
 
-             {/* Quick Filter Pills: จำแนกตามรายการติดตามครั้งที่ */}
-             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 hide-scrollbar pt-1">
+             {/* Quick Filter Pills: จำแนกตามรายการติดตามครั้งที่ (แสดงครบทุกปุ่มโดยไม่ถูกตัดขอบ) */}
+             <div className="flex flex-wrap items-center gap-1.5 pt-1">
                <button 
                  onClick={() => setRoundFilter('all')}
-                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === 'all' ? 'bg-purple-600 text-white border-purple-600 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === 'all' ? 'bg-purple-600 text-white border-purple-600 shadow-2xs' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
                >
                  ทั้งหมด ({countsStats.total})
                </button>
                <button 
                  onClick={() => setRoundFilter('1')}
-                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '1' ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '1' ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
                >
                  รอบแรก ({countsStats.r1})
                </button>
                <button 
                  onClick={() => setRoundFilter('2')}
-                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '2' ? 'bg-sky-600 text-white border-sky-600 shadow-xs' : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'}`}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '2' ? 'bg-sky-600 text-white border-sky-600 shadow-2xs' : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'}`}
                >
                  ติดตาม 2 ครั้ง ({countsStats.r2})
                </button>
                <button 
                  onClick={() => setRoundFilter('3+')}
-                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '3+' ? 'bg-purple-600 text-white border-purple-600 shadow-xs' : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'}`}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '3+' ? 'bg-purple-600 text-white border-purple-600 shadow-2xs' : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'}`}
                >
                  ติดตาม 3 ครั้ง+ ({countsStats.r3Plus})
                </button>
                <button 
                  onClick={() => setRoundFilter('0')}
-                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '0' ? 'bg-slate-700 text-white border-slate-700 shadow-xs' : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'}`}
+                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap transition border ${roundFilter === '0' ? 'bg-slate-700 text-white border-slate-700 shadow-2xs' : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'}`}
                >
                  ยังไม่ประเมิน ({countsStats.r0})
                </button>
@@ -3011,7 +3221,7 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
         </div>
 
         {/* List of Users */}
-        <div className="flex-1 overflow-y-auto hide-scrollbar space-y-3 pb-6">
+        <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 space-y-2.5 pb-6">
           {filteredStudents.map((student, index) => {
             const st5Count = st5Data.filter(d => d.uid === student.id || d.userId === student.id).length;
             const behCount = behaviorData.filter(d => d.targetUid === student.id).length;
@@ -3019,36 +3229,36 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
 
             return (
               <div key={`${student.id}-${index}`} onClick={() => setSelectedUserId(student.id)} 
-                   className={`p-4 rounded-[2rem] shadow-sm border flex justify-between items-center hover:shadow-md transition-all cursor-pointer group transform hover:-translate-y-0.5 ${isSelected ? 'bg-purple-50 border-purple-200 ring-2 ring-purple-400/20' : 'bg-white border-slate-100 hover:border-purple-200'}`}>
-                <div className="flex items-center gap-3.5 overflow-hidden">
-                  <div className={`w-11 h-11 shrink-0 rounded-full flex items-center justify-center font-black text-base shadow-inner border border-white transition-colors ${isSelected ? 'bg-purple-500 text-white' : 'bg-gradient-to-br from-purple-100 to-pink-100 text-purple-500'}`}>
+                   className={`p-3.5 rounded-[1.75rem] shadow-xs border flex justify-between items-center hover:shadow-md transition-all cursor-pointer group ${isSelected ? 'bg-purple-50 border-purple-200 ring-2 ring-purple-400/20' : 'bg-white border-slate-100 hover:border-purple-200'}`}>
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <div className={`w-10 h-10 shrink-0 rounded-full flex items-center justify-center font-black text-sm shadow-inner border border-white transition-colors ${isSelected ? 'bg-purple-500 text-white' : 'bg-gradient-to-br from-purple-100 to-pink-100 text-purple-500'}`}>
                     {index + 1}
                   </div>
                   <div className="min-w-0">
                     <p className={`font-bold truncate text-sm transition ${isSelected ? 'text-purple-700' : 'text-slate-700 group-hover:text-purple-600'}`}>{student.name}</p>
-                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                      <span className="text-[9px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md">
+                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                      <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md">
                         {student.accountType === 'student' ? 'นักเรียน' : student.accountType === 'teacher' ? 'ครู' : 'ชุมชน'}
                       </span>
                       {st5Count >= 2 ? (
-                        <span className="text-[9px] font-bold bg-teal-50 text-teal-700 px-2 py-0.5 rounded-md border border-teal-200 flex items-center gap-1">
+                        <span className="text-[10px] font-bold bg-teal-50 text-teal-700 px-2 py-0.5 rounded-md border border-teal-200 flex items-center gap-1">
                           🔄 ติดตาม {st5Count} ครั้ง
                         </span>
                       ) : st5Count === 1 ? (
-                        <span className="text-[9px] font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md border border-indigo-200">
+                        <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md border border-indigo-200">
                           🌱 ประเมินรอบแรก
                         </span>
                       ) : (
-                        <span className="text-[9px] font-bold bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-md">
+                        <span className="text-[10px] font-bold bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-md">
                           ยังไม่ประเมิน
                         </span>
                       )}
-                      {behCount > 0 && <span className="text-[9px] font-bold bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded-md border border-orange-100">พฤติกรรม: {behCount}</span>}
+                      {behCount > 0 && <span className="text-[10px] font-bold bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded-md border border-orange-100">พฤติกรรม: {behCount}</span>}
                     </div>
                   </div>
                 </div>
-                <div className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center transition-all shadow-sm ${isSelected ? 'bg-purple-500 text-white' : 'bg-slate-50 text-slate-300 group-hover:bg-purple-400 group-hover:text-white'}`}>
-                  <ChevronRight size={18} strokeWidth={3}/>
+                <div className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center transition-all shadow-2xs ${isSelected ? 'bg-purple-500 text-white' : 'bg-slate-50 text-slate-300 group-hover:bg-purple-400 group-hover:text-white'}`}>
+                  <ChevronRight size={16} strokeWidth={3}/>
                 </div>
               </div>
             );
@@ -3062,10 +3272,10 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
         </div>
       </div>
 
-      {/* 2. Main Content Area */}
-      <div className={`w-full lg:flex-1 overflow-y-auto hide-scrollbar bg-slate-50/50 rounded-[2.5rem] border border-slate-100 relative ${!selectedUser ? 'hidden lg:block' : 'block'}`}>
+      {/* 2. Main Content Area (จัดแนวขอบบนให้ตรงกับการ์ดรายชื่อซ้ายมืออย่างพอดี) */}
+      <div className={`w-full lg:flex-1 min-w-0 overflow-y-auto custom-scrollbar pr-1 relative ${!selectedUser ? 'hidden lg:block' : 'block'}`}>
         {selectedUser ? (
-          <div className="p-4 md:p-6 lg:p-8 min-h-full">
+          <div className="pb-8">
             <AdminStudentDetail 
               student={selectedUser} 
               st5History={st5Data.filter(d => d.uid === selectedUser.id || d.userId === selectedUser.id)} 
@@ -3077,7 +3287,7 @@ function AdminDashboard({ users, st5Data, behaviorData, profile, triggerAlert, t
             />
           </div>
         ) : (
-          <div className="p-4 md:p-6 lg:p-8 min-h-full">
+          <div className="pb-8">
             <FollowUpTrackerView 
               students={students}
               st5Data={st5Data}
@@ -3139,7 +3349,7 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
   const deleteSt5 = (st5Id, timestamp) => {
     triggerConfirm('ยืนยันการลบประวัติคัดกรอง ST-5 นี้ออกจากระบบ?', async () => {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', st5Id));
-      syncToGoogleSheet('DELETE_ST5', { targetName: student.name, timestamp: timestamp });
+      syncToGoogleSheet('DELETE_ST5', { targetName: student.rawName || student.name, timestamp: timestamp });
       triggerAlert('ลบประวัติ ST-5 เรียบร้อยแล้วค่ะ', 'success');
     }, 'danger');
   };
@@ -3147,7 +3357,7 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
   const deleteBehavior = (behId, timestamp) => {
     triggerConfirm('ยืนยันการลบประวัติประเมินพฤติกรรมนี้ออกจากระบบ?', async () => {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', behId));
-      syncToGoogleSheet('DELETE_BEHAVIOR', { targetName: student.name, timestamp: timestamp });
+      syncToGoogleSheet('DELETE_BEHAVIOR', { targetName: student.rawName || student.name, timestamp: timestamp });
       triggerAlert('ลบประวัติพฤติกรรมเรียบร้อยแล้วค่ะ', 'success');
     }, 'danger');
   };
@@ -3171,7 +3381,10 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
               {student.name.charAt(0)}
            </div>
            <div>
-             <h2 className="text-2xl md:text-3xl font-black text-slate-800 tracking-tight">{student.name}</h2>
+             <div className="flex items-center gap-3 flex-wrap">
+               <h2 className="text-2xl md:text-3xl font-black text-slate-800 tracking-tight">{student.name}</h2>
+               <PrivacyToggleButton compact />
+             </div>
              <div className="flex items-center gap-2 mt-2 flex-wrap">
                 <p className="text-slate-500 text-sm font-medium bg-slate-50 px-3 py-1 rounded-lg">ID: {student.id}</p>
                 <button onClick={() => setEditingUser(true)} className="text-sky-500 hover:bg-sky-50 px-3 py-1 rounded-lg text-xs font-bold transition">แก้ไขข้อมูล</button>
@@ -3225,7 +3438,7 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
             };
             if (editingSt5) {
                 await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', editingSt5.id), updatedSt5);
-                syncToGoogleSheet('EDIT_ST5', { targetName: student.name, timestamp: editingSt5.timestamp, ...updatedSt5 });
+                syncToGoogleSheet('EDIT_ST5', { targetName: student.rawName || student.name, timestamp: editingSt5.timestamp, ...updatedSt5 });
                 triggerAlert('อัปเดตผลประเมิน ST-5 เรียบร้อย', 'success');
             }
             setShowSt5Form(false);
@@ -4459,7 +4672,7 @@ function SuperAdminBehaviorReportDashboard({ users, st5Data, behaviorData, profi
     if (!triggerConfirm) return;
     triggerConfirm(`ยืนยันการลบข้อมูลการประเมินพฤติกรรมของ "${record.studentName}" (ครั้งที่ ${record.roundNumber}) หรือไม่?`, async () => {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', record.id));
-      syncToGoogleSheet('DELETE_BEHAVIOR', { targetName: record.studentName, timestamp: record.timestamp });
+      syncToGoogleSheet('DELETE_BEHAVIOR', { targetName: record.rawStudentName || record.studentName, timestamp: record.timestamp });
       if (triggerAlert) triggerAlert('ลบรายการประเมินพฤติกรรมเรียบร้อยแล้วค่ะ', 'success');
       if (inspectingRecordId === record.id) setInspectingRecordId(null);
     }, 'danger');
@@ -4471,6 +4684,7 @@ function SuperAdminBehaviorReportDashboard({ users, st5Data, behaviorData, profi
     const nameMap = new Map<string, any>();
     studentUsers.forEach((u: any) => {
       userMap.set(String(u.id), u);
+      if (u.rawName) nameMap.set(String(u.rawName).trim(), u);
       if (u.name) nameMap.set(String(u.name).trim(), u);
     });
 
@@ -4480,10 +4694,10 @@ function SuperAdminBehaviorReportDashboard({ users, st5Data, behaviorData, profi
     behaviorData.forEach((beh: any) => {
       const rawUid = beh.targetUid || beh.uid || beh.userId || '';
       let matchedUser = userMap.get(String(rawUid));
-      if (!matchedUser && beh.targetName) {
-        matchedUser = nameMap.get(String(beh.targetName).trim());
+      if (!matchedUser && (beh.rawTargetName || beh.targetName)) {
+        matchedUser = nameMap.get(String(beh.rawTargetName || beh.targetName).trim());
       }
-      const studentKey = matchedUser ? String(matchedUser.id) : (String(rawUid) || String(beh.targetName || 'unknown'));
+      const studentKey = matchedUser ? String(matchedUser.id) : (String(rawUid) || String(beh.rawTargetName || beh.targetName || 'unknown'));
       if (!groupedByStudent.has(studentKey)) {
         groupedByStudent.set(studentKey, []);
       }
@@ -4499,12 +4713,13 @@ function SuperAdminBehaviorReportDashboard({ users, st5Data, behaviorData, profi
       const totalRounds = sorted.length;
       const sampleUser = sorted[0]?.matchedUser;
       const studentName = sampleUser?.name || sorted[0]?.beh?.targetName || studentKey;
+      const rawStudentName = sampleUser?.rawName || sampleUser?.name || sorted[0]?.beh?.rawTargetName || sorted[0]?.beh?.targetName || studentKey;
       const studentAff = sampleUser?.affiliation || 'ไม่ระบุสังกัด';
       const areaMeta = getAreaMetadata(Array.isArray(studentAff) ? studentAff[0] : String(studentAff));
 
       // ดึงประวัติ ST-5 ของนักเรียนคนนี้ (เก่า -> ใหม่)
       const userSt5 = st5Data
-        .filter((s: any) => String(s.uid || s.userId) === studentKey || (s.userName && s.userName === studentName))
+        .filter((s: any) => String(s.uid || s.userId) === studentKey || ((s.rawUserName || s.userName) && (s.rawUserName || s.userName) === rawStudentName))
         .sort((a: any, b: any) => getSafeTimestamp(a.timestamp) - getSafeTimestamp(b.timestamp));
 
       const latestSt5 = userSt5.length > 0 ? userSt5[userSt5.length - 1] : null;
@@ -4561,7 +4776,8 @@ function SuperAdminBehaviorReportDashboard({ users, st5Data, behaviorData, profi
           id: beh.id || `${studentKey}-beh-${roundNumber}`,
           studentId: studentKey,
           studentName,
-          student: sampleUser || { id: studentKey, name: studentName, affiliation: studentAff, accountType: 'student' },
+          rawStudentName,
+          student: sampleUser || { id: studentKey, name: studentName, rawName: rawStudentName, affiliation: studentAff, accountType: 'student' },
           affiliation: displayAffiliation(studentAff) || 'ไม่ระบุสังกัด',
           model: areaMeta.model,
           district: areaMeta.district,
@@ -4593,7 +4809,8 @@ function SuperAdminBehaviorReportDashboard({ users, st5Data, behaviorData, profi
       studentProfiles.push({
         studentId: studentKey,
         studentName,
-        student: sampleUser || { id: studentKey, name: studentName, affiliation: studentAff, accountType: 'student' },
+        rawStudentName,
+        student: sampleUser || { id: studentKey, name: studentName, rawName: rawStudentName, affiliation: studentAff, accountType: 'student' },
         affiliation: displayAffiliation(studentAff) || 'ไม่ระบุสังกัด',
         model: areaMeta.model,
         district: areaMeta.district,
@@ -4628,7 +4845,7 @@ function SuperAdminBehaviorReportDashboard({ users, st5Data, behaviorData, profi
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
-      const matchName = item.studentName && String(item.studentName).toLowerCase().includes(q);
+      const matchName = (item.studentName && String(item.studentName).toLowerCase().includes(q)) || (item.rawStudentName && String(item.rawStudentName).toLowerCase().includes(q));
       const matchId = item.studentId && String(item.studentId).toLowerCase().includes(q);
       const matchAff = item.affiliation && String(item.affiliation).toLowerCase().includes(q);
       const matchBehItem = checkItems.some(b => String(b).toLowerCase().includes(q));
@@ -4978,6 +5195,7 @@ function SuperAdminBehaviorReportDashboard({ users, st5Data, behaviorData, profi
         </div>
 
         <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <PrivacyToggleButton className="py-3 px-4 text-xs md:text-sm rounded-2xl" />
           <button
             onClick={handleExportCSV}
             className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-xs md:text-sm shadow-md shadow-emerald-100 transition flex items-center gap-2 cursor-pointer"
@@ -6061,9 +6279,12 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
             รายงานรายละเอียดการประเมินพฤติกรรม (เชิงบวก - เชิงลบ)
           </button>
         </div>
-        <span className="text-[11px] font-bold text-slate-400 px-3 hidden sm:inline">
-          ข้อมูลพฤติกรรมในระบบทั้งหมด: <strong className="text-emerald-600">{behaviorData.length} รายการ</strong>
-        </span>
+        <div className="flex items-center gap-3 ml-auto">
+          <span className="text-[11px] font-bold text-slate-400 px-2 hidden sm:inline">
+            ข้อมูลพฤติกรรมในระบบทั้งหมด: <strong className="text-emerald-600">{behaviorData.length} รายการ</strong>
+          </span>
+          <PrivacyToggleButton />
+        </div>
       </div>
 
       {dashboardSection === 'behavior_report' ? (
@@ -6087,7 +6308,10 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
       )}
 
       <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-        <h3 className="font-black text-xl mb-6 text-orange-500 flex items-center gap-2"><Clock size={24}/> คำขออนุมัติสิทธิ์แอดมิน</h3>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+          <h3 className="font-black text-xl text-orange-500 flex items-center gap-2"><Clock size={24}/> คำขออนุมัติสิทธิ์แอดมิน</h3>
+          <PrivacyToggleButton />
+        </div>
         {pendingAdmins.length === 0 ? (
           <p className="text-sm text-slate-400 bg-slate-50 p-6 rounded-2xl text-center border border-dashed border-slate-200">เรียบร้อยดี ไม่มีรายการค้างอนุมัติค่ะ</p>
         ) : (
@@ -6121,7 +6345,10 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
       />
 
       <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-        <h3 className="font-black text-xl mb-6 text-slate-800">จัดการผู้ใช้งานทั้งหมดในระบบ</h3>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+          <h3 className="font-black text-xl text-slate-800">จัดการผู้ใช้งานทั้งหมดในระบบ</h3>
+          <PrivacyToggleButton />
+        </div>
         
         {['superadmin', 'admin', 'user'].map(roleGroup => {
           const roleUsers = displayUsers.filter(u => u.role === roleGroup);
@@ -6203,7 +6430,7 @@ function SuperAdminDashboard({ users, st5Data, behaviorData, profile, triggerAle
 // 🟢 Component ย่อยสำหรับการแก้ไขข้อมูล User (แสดงเป็น Popup)
 function EditUserModal({ user, onClose, onSave }) {
   const [formData, setFormData] = useState({
-    name: user.name || '',
+    name: user.rawName || user.name || '',
     accountType: user.accountType || 'student',
     affiliation: user.affiliation || '',
     status: user.status || 'approved',
@@ -6749,6 +6976,7 @@ function ExecutiveAnalyticsDashboard({ users, st5Data, behaviorData, profile }) 
             ศูนย์บัญชาการข้อมูลสุขภาพจิตและพฤติกรรมเชิงลึกระดับนโยบาย
           </p>
         </div>
+        <PrivacyToggleButton />
       </div>
 
       {/* FILTER SECTION */}
@@ -7558,7 +7786,10 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
            </div>
         </div>
 
-        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4 w-full md:w-auto">
+        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3 w-full md:w-auto flex-wrap">
+          <div className="no-print">
+            <PrivacyToggleButton className="w-full md:w-auto py-2.5" />
+          </div>
           <button onClick={handlePrint} disabled={isPrinting} className={`bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 transition shadow-sm text-sm no-print ${isPrinting ? 'opacity-50 cursor-not-allowed' : ''}`}>
             {isPrinting ? <RefreshCw size={16} className="animate-spin" /> : <Printer size={16} />} 
             {isPrinting ? 'กำลังเตรียม PDF...' : 'พิมพ์รายงาน'}
@@ -8001,7 +8232,7 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
     const timestamp = initialData ? initialData.timestamp : Date.now();
     const payload = { 
       targetUid: targetUser.id, 
-      targetName: targetUser.name, 
+      targetName: targetUser.rawName || targetUser.name, 
       selections: selections || { desirable: [], undesirable: [] },
       desirable: (selections?.desirable || []).join(', '),
       undesirable: (selections?.undesirable || []).join(', '),
@@ -8732,10 +8963,13 @@ function ExecutiveSummaryReport({ users, st5Data, behaviorData, profile }) {
           <h2 className="text-2xl font-black text-slate-800">รายงานสำหรับผู้บริหาร</h2>
           <p className="text-slate-500 text-sm mt-1">ข้อมูลเชิงลึกและบทสรุป (Executive Summary)</p>
         </div>
-        <button onClick={handleExportPDF} disabled={isExporting} className="w-full md:w-auto bg-slate-800 hover:bg-slate-700 text-white px-6 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md transition-all">
-          {isExporting ? <RefreshCw className="animate-spin" size={18} /> : <FileText size={18} />}
-          {isExporting ? 'กำลังประมวลผล PDF...' : 'ส่งออก PDF ฉบับสมบูรณ์'}
-        </button>
+        <div className="flex flex-wrap items-center justify-center gap-3 w-full md:w-auto">
+          <PrivacyToggleButton className="py-3.5 px-4" />
+          <button onClick={handleExportPDF} disabled={isExporting} className="w-full sm:w-auto bg-slate-800 hover:bg-slate-700 text-white px-6 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md transition-all">
+            {isExporting ? <RefreshCw className="animate-spin" size={18} /> : <FileText size={18} />}
+            {isExporting ? 'กำลังประมวลผล PDF...' : 'ส่งออก PDF ฉบับสมบูรณ์'}
+          </button>
+        </div>
       </div>
 
       {/* Interactive Tabs Menu */}
