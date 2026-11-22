@@ -1719,9 +1719,10 @@ function UserDashboard({ users, profile, st5Data, behaviorData, triggerAlert, tr
       .sort((a: any, b: any) => parseTs(b.timestamp) - parseTs(a.timestamp));
   }, [st5Data, profile]);
 
-  const handleSubmitST5 = async (answers, score) => {
+  const handleSubmitST5 = async (answers: number[], score: number, customTimestamp?: number) => {
     const st5Obj = calculateST5(score);
-    const payload = { uid: profile.id, userId: profile.id, userName: profile.rawName || profile.name, answers, score, level: st5Obj.level, timestamp: editingST5 ? editingST5.timestamp : Date.now(), suggestion: editingST5 ? editingST5.suggestion : '' };
+    const finalTimestamp = customTimestamp || (editingST5 ? editingST5.timestamp : Date.now());
+    const payload = { uid: profile.id, userId: profile.id, userName: profile.rawName || profile.name, answers, score, level: st5Obj.level, timestamp: finalTimestamp, suggestion: editingST5 ? editingST5.suggestion : '' };
     
     if (editingST5) {
        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', editingST5.id), payload);
@@ -3909,23 +3910,29 @@ function AdminStudentDetail({ student, st5History, behaviorHistory, onBack, trig
               initialData={editingSt5}
               studentName={student.name}
               onCancel={() => { setShowSt5Form(false); setEditingSt5(null); }}
-              onSubmit={async (answers, totalScore) => {
+              onSubmit={async (answers, totalScore, customTimestamp) => {
                 try {
+                  const finalTimestamp = customTimestamp || editingSt5?.timestamp || Date.now();
                   const updatedSt5 = {
                     answers,
                     score: totalScore,
                     level: calculateST5(totalScore).level,
+                    timestamp: finalTimestamp,
                   };
                   if (editingSt5 && editingSt5.id) {
                     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'st5', String(editingSt5.id)), updatedSt5);
-                    syncToGoogleSheet('EDIT_ST5', { targetName: student.rawName || student.name, timestamp: editingSt5.timestamp, ...updatedSt5 });
-                    triggerAlert(`อัปเดตผลประเมิน ST-5 (คะแนนใหม่: ${totalScore} คะแนน - ${updatedSt5.level}) เรียบร้อยแล้วค่ะ ✦`, 'success');
+                    syncToGoogleSheet('EDIT_ST5', {
+                      targetName: student.rawName || student.name,
+                      oldTimestamp: editingSt5.timestamp,
+                      ...updatedSt5,
+                    });
+                    const formattedDate = new Date(finalTimestamp).toLocaleDateString('th-TH');
+                    triggerAlert(`อัปเดตผลประเมิน ST-5 (วันที่ ${formattedDate} • ${totalScore} คะแนน - ${updatedSt5.level}) เรียบร้อยแล้วค่ะ ✦`, 'success');
                   } else {
                     const newPayload = {
                       uid: student.id,
                       userName: student.rawName || student.name,
                       ...updatedSt5,
-                      timestamp: editingSt5?.timestamp || Date.now(),
                       suggestion: editingSt5?.suggestion || ''
                     };
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'st5'), newPayload);
@@ -8693,7 +8700,34 @@ function ProjectReportDashboard({ users, st5Data, behaviorData, profile }) {
   );
 }
 
-function ST5Form({ onSubmit, onCancel, initialData, studentName }: { onSubmit: (answers: number[], totalScore: number) => any; onCancel: () => void; initialData?: any; studentName?: string }) {
+const timestampToDateInputValue = (ts: any): string => {
+  const num = Number(ts);
+  const d = !isNaN(num) && num > 0 ? new Date(num) : (ts ? new Date(ts) : new Date());
+  const validDate = isNaN(d.getTime()) ? new Date() : d;
+  const yyyy = validDate.getFullYear();
+  const mm = String(validDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(validDate.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const dateInputValueToTimestamp = (dateStr: string, originalTs?: any): number => {
+  if (!dateStr) return originalTs ? Number(originalTs) || Date.now() : Date.now();
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) return Date.now();
+  const origNum = Number(originalTs);
+  const base = !isNaN(origNum) && origNum > 0 ? new Date(origNum) : new Date();
+  const result = new Date(
+    y,
+    m - 1,
+    d,
+    isNaN(base.getTime()) ? 12 : base.getHours(),
+    isNaN(base.getTime()) ? 0 : base.getMinutes(),
+    isNaN(base.getTime()) ? 0 : base.getSeconds()
+  );
+  return isNaN(result.getTime()) ? Date.now() : result.getTime();
+};
+
+function ST5Form({ onSubmit, onCancel, initialData, studentName }: { onSubmit: (answers: number[], totalScore: number, updatedTimestamp?: number) => any; onCancel: () => void; initialData?: any; studentName?: string }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // แปลงข้อมูลคำตอบเดิมอย่างปลอดภัย รองรับทั้ง Array ตัวเลข/ตัวอักษร, q1-q5, หรือกรณีมีเฉพาะคะแนนรวม (score)
@@ -8727,14 +8761,22 @@ function ST5Form({ onSubmit, onCancel, initialData, studentName }: { onSubmit: (
   };
 
   const [answers, setAnswers] = useState<(number | null)[]>(() => parseInitialAnswers(initialData));
+  const [assessmentDate, setAssessmentDate] = useState<string>(() => timestampToDateInputValue(initialData?.timestamp));
 
   useEffect(() => {
     setAnswers(parseInitialAnswers(initialData));
+    setAssessmentDate(timestampToDateInputValue(initialData?.timestamp));
   }, [initialData]);
 
   const isComplete = answers.every(a => a !== null && !isNaN(Number(a)));
   const totalScore = answers.reduce<number>((a, b) => a + (Number(b) || 0), 0);
   const currentStatus = calculateST5(totalScore);
+  const previewTimestamp = dateInputValueToTimestamp(assessmentDate, initialData?.timestamp);
+  const thaiDatePreview = new Date(previewTimestamp).toLocaleDateString('th-TH', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 
   return (
     <div className="bg-white p-6 md:p-10 rounded-[2.5rem] shadow-2xl border border-slate-100 max-w-3xl mx-auto animate-in fade-in zoom-in-95 duration-300 relative max-h-[88vh] overflow-y-auto custom-scrollbar">
@@ -8761,21 +8803,43 @@ function ST5Form({ onSubmit, onCancel, initialData, studentName }: { onSubmit: (
         </span>
       </div>
 
-      {/* แถบสรุปคะแนนรวมแบบเรียลไทม์ */}
-      <div className="mb-6 p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs md:text-sm font-bold text-slate-600">คะแนนรวมจากการเลือก:</span>
-          <span className="text-lg md:text-xl font-black text-slate-800">{totalScore} <span className="text-xs font-normal text-slate-400">/ 15 คะแนน</span></span>
+      {/* แถบเลือก/แก้ไขวันที่ประเมิน และสรุปคะแนนรวมแบบเรียลไทม์ */}
+      <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="p-4 rounded-2xl bg-sky-50/70 border border-sky-200 flex flex-col justify-center gap-1.5">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-extrabold text-sky-800 flex items-center gap-1.5">
+              <Calendar size={14} className="text-sky-600" />
+              วันที่ทำการประเมิน
+            </label>
+            <span className="text-[11px] font-bold text-sky-700 bg-white px-2.5 py-0.5 rounded-full border border-sky-200">
+              พ.ศ.: {thaiDatePreview}
+            </span>
+          </div>
+          <input
+            type="date"
+            value={assessmentDate}
+            onChange={(e) => setAssessmentDate(e.target.value)}
+            className="w-full px-3.5 py-2 rounded-xl border border-sky-200 bg-white text-slate-700 font-bold text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer"
+          />
         </div>
-        {isComplete ? (
-          <span className={`px-3.5 py-1 rounded-full text-xs font-bold border shadow-2xs ${currentStatus.color}`}>
-            ระดับผลประเมิน: {currentStatus.level}
-          </span>
-        ) : (
-          <span className="text-xs font-bold text-amber-600 bg-amber-50 px-3 py-1 rounded-full border border-amber-200">
-            กรุณาเลือกคำตอบให้ครบทั้ง 5 ข้อ
-          </span>
-        )}
+
+        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-center gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-bold text-slate-600">คะแนนรวมจากการเลือก:</span>
+            <span className="text-lg md:text-xl font-black text-slate-800">{totalScore} <span className="text-xs font-normal text-slate-400">/ 15 คะแนน</span></span>
+          </div>
+          <div className="flex items-center justify-end">
+            {isComplete ? (
+              <span className={`px-3.5 py-1 rounded-full text-xs font-bold border shadow-2xs ${currentStatus.color}`}>
+                ระดับผลประเมิน: {currentStatus.level}
+              </span>
+            ) : (
+              <span className="text-xs font-bold text-amber-600 bg-amber-50 px-3 py-1 rounded-full border border-amber-200">
+                กรุณาเลือกคำตอบให้ครบทั้ง 5 ข้อ
+              </span>
+            )}
+          </div>
+        </div>
       </div>
       
       <div className="space-y-4">
@@ -8815,7 +8879,8 @@ function ST5Form({ onSubmit, onCancel, initialData, studentName }: { onSubmit: (
             setIsSubmitting(true);
             try {
               const numericAnswers = answers.map(a => Number(a) || 0);
-              await onSubmit(numericAnswers, totalScore);
+              const updatedTs = dateInputValueToTimestamp(assessmentDate, initialData?.timestamp);
+              await onSubmit(numericAnswers, totalScore, updatedTs);
             } finally {
               setIsSubmitting(false);
             }
@@ -8844,6 +8909,20 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
   const [st5RoundId, setSt5RoundId] = useState(
     initialData?.st5RoundId || ''
   );
+  const [assessmentDate, setAssessmentDate] = useState<string>(() =>
+    timestampToDateInputValue(initialData?.timestamp)
+  );
+
+  useEffect(() => {
+    if (initialData) {
+      setSelections({
+        desirable: initialData.selections?.desirable || [],
+        undesirable: initialData.selections?.undesirable || [],
+      });
+      setSt5RoundId(initialData.st5RoundId || '');
+      setAssessmentDate(timestampToDateInputValue(initialData.timestamp));
+    }
+  }, [initialData]);
 
   const toggleSelection = (type, item) => {
     setSelections(prev => {
@@ -8857,30 +8936,36 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
   const handleSave = async () => {
     setIsSubmitting(true);
     try {
-    const timestamp = initialData ? initialData.timestamp : Date.now();
-    const payload = { 
-      targetUid: targetUser.id, 
-      targetName: targetUser.rawName || targetUser.name, 
-      selections: selections || { desirable: [], undesirable: [] },
-      desirable: (selections?.desirable || []).join(', '),
-      undesirable: (selections?.undesirable || []).join(', '),
-      timestamp, 
-      st5RoundId 
-    };
-    
-    if (initialData && initialData.id) {
-      // โหมดแก้ไข
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', initialData.id), { selections, st5RoundId });
-      syncToGoogleSheet('EDIT_BEHAVIOR', payload);
-    } else {
-      // โหมดสร้างใหม่
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'behaviors'), payload);
-      syncToGoogleSheet('BEHAVIOR', payload);
-    }
-    
-    onDone();
+      const timestamp = dateInputValueToTimestamp(assessmentDate, initialData?.timestamp);
+      const payload = { 
+        targetUid: targetUser.id, 
+        targetName: targetUser.rawName || targetUser.name, 
+        selections: selections || { desirable: [], undesirable: [] },
+        desirable: (selections?.desirable || []).join(', '),
+        undesirable: (selections?.undesirable || []).join(', '),
+        timestamp, 
+        st5RoundId 
+      };
+      
+      if (initialData && initialData.id) {
+        // โหมดแก้ไข (อัปเดตทั้งพฤติกรรม รอบอ้างอิง และวันที่ประเมิน)
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'behaviors', String(initialData.id)), {
+          selections,
+          desirable: payload.desirable,
+          undesirable: payload.undesirable,
+          st5RoundId,
+          timestamp,
+        });
+        syncToGoogleSheet('EDIT_BEHAVIOR', { ...payload, oldTimestamp: initialData.timestamp });
+      } else {
+        // โหมดสร้างใหม่
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'behaviors'), payload);
+        syncToGoogleSheet('BEHAVIOR', payload);
+      }
+      
+      onDone();
     } finally {
-        setIsSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -8911,54 +8996,81 @@ function BehaviorForm({ targetUser, onDone, initialData, st5History = [], behavi
     </div>
   );
 
+  const behPreviewTs = dateInputValueToTimestamp(assessmentDate, initialData?.timestamp);
+  const behThaiDatePreview = new Date(behPreviewTs).toLocaleDateString('th-TH', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+
   return (
-    <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/40 border border-slate-100 mt-6 animate-in fade-in slide-in-from-top-4 duration-300">
+    <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/40 border border-slate-100 mt-2 animate-in fade-in slide-in-from-top-4 duration-300 max-h-[85vh] overflow-y-auto custom-scrollbar">
       <div className="mb-8">
         <h3 className="text-2xl font-black text-slate-800">
           {initialData ? '✏️ แก้ไขแบบประเมินพฤติกรรม' : 'แบบประเมินพฤติกรรม'}
         </h3>
         <p className="text-slate-500 text-sm mt-1 mb-4">เลือกติ๊กพฤติกรรมที่สังเกตเห็นในตัวนักเรียน</p>
 
-        {st5History && st5History.length > 0 && (
-          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex flex-col gap-2">
-             <label className="text-sm font-bold text-slate-700">อ้างอิงจากการประเมินสุขภาพจิต (ST-5)</label>
-             <select 
-               className="w-full md:w-1/2 p-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent bg-white text-slate-700 font-medium"
-               value={st5RoundId}
-               onChange={(e) => {
-                 const selectedId = e.target.value;
-                 if (selectedId) {
-                   const alreadyAssessed = behaviorHistory.find(b => b.st5RoundId === selectedId && (!initialData || b.id !== initialData.id));
-                   if (alreadyAssessed) {
-                     if (triggerAlert) {
-                       triggerAlert('มีการประเมินพฤติกรรมแล้วในครั้งนี้ หากต้องการแก้ไขกรุณากดปุ่ม "แก้ไข" ในรายการด้านล่าง', 'error');
-                     }
-                     return;
-                   }
-                 }
-                 setSt5RoundId(selectedId);
-               }}
-             >
-                <option value="">ไม่ระบุ / ประเมินทั่วไป</option>
-                {st5History.map((st5, idx) => {
-                  const roundNum = st5History.length - idx;
-                  const dateStr = new Date(st5.timestamp).toLocaleDateString('th-TH', { dateStyle: 'short' });
-                  return (
-                    <option key={`${st5.id}-${idx}`} value={st5.id}>
-                      ครั้งที่ {roundNum} ({dateStr}) - {st5.level || calculateST5(st5.score).level}
-                    </option>
-                  );
-                })}
-             </select>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="bg-sky-50/70 p-4 rounded-2xl border border-sky-200 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-bold text-sky-900 flex items-center gap-1.5">
+                <Calendar size={15} className="text-sky-600" />
+                วันที่ประเมินพฤติกรรม
+              </label>
+              <span className="text-xs font-bold text-sky-700 bg-white px-2.5 py-0.5 rounded-full border border-sky-200">
+                พ.ศ.: {behThaiDatePreview}
+              </span>
+            </div>
+            <input
+              type="date"
+              value={assessmentDate}
+              onChange={(e) => setAssessmentDate(e.target.value)}
+              className="w-full p-2.5 rounded-xl border border-sky-200 bg-white text-slate-700 font-bold text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer"
+            />
           </div>
-        )}
+
+          {st5History && st5History.length > 0 && (
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex flex-col gap-2">
+               <label className="text-sm font-bold text-slate-700">อ้างอิงจากการประเมินสุขภาพจิต (ST-5)</label>
+               <select 
+                 className="w-full p-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent bg-white text-slate-700 font-medium"
+                 value={st5RoundId}
+                 onChange={(e) => {
+                   const selectedId = e.target.value;
+                   if (selectedId) {
+                     const alreadyAssessed = behaviorHistory.find(b => b.st5RoundId === selectedId && (!initialData || b.id !== initialData.id));
+                     if (alreadyAssessed) {
+                       if (triggerAlert) {
+                         triggerAlert('มีการประเมินพฤติกรรมแล้วในครั้งนี้ หากต้องการแก้ไขกรุณากดปุ่ม "แก้ไข" ในรายการด้านล่าง', 'error');
+                       }
+                       return;
+                     }
+                   }
+                   setSt5RoundId(selectedId);
+                 }}
+               >
+                  <option value="">ไม่ระบุ / ประเมินทั่วไป</option>
+                  {st5History.map((st5, idx) => {
+                    const roundNum = st5History.length - idx;
+                    const dateStr = new Date(st5.timestamp).toLocaleDateString('th-TH', { dateStyle: 'short' });
+                    return (
+                      <option key={`${st5.id}-${idx}`} value={st5.id}>
+                        ครั้งที่ {roundNum} ({dateStr}) - {st5.level || calculateST5(st5.score).level}
+                      </option>
+                    );
+                  })}
+               </select>
+            </div>
+          )}
+        </div>
       </div>
       {renderSection('desirable', behaviors.desirable, { bg: 'bg-teal-50/50', border: 'border-teal-100', text: 'text-teal-700', activeItem: 'bg-teal-50 border-teal-200 shadow-sm', checkbox: 'text-teal-500' })}
       {renderSection('undesirable', behaviors.undesirable, { bg: 'bg-rose-50/50', border: 'border-rose-100', text: 'text-rose-700', activeItem: 'bg-rose-50 border-rose-200 shadow-sm', checkbox: 'text-rose-500' })}
       
       <div className="flex flex-col-reverse md:flex-row gap-4 mt-8 pt-6">
-        <button onClick={onDone} className="flex-1 py-4 bg-slate-100 rounded-2xl text-slate-500 font-bold hover:bg-slate-200 transition">ยกเลิก</button>
-        <button onClick={handleSave} disabled={isSubmitting} className="flex-[2] py-4 bg-slate-800 text-white rounded-2xl font-bold hover:bg-slate-700 disabled:opacity-50 shadow-lg transition">
+        <button onClick={onDone} className="flex-1 py-4 bg-slate-100 rounded-2xl text-slate-500 font-bold hover:bg-slate-200 transition cursor-pointer">ยกเลิก</button>
+        <button onClick={handleSave} disabled={isSubmitting} className="flex-[2] py-4 bg-slate-800 text-white rounded-2xl font-bold hover:bg-slate-700 disabled:opacity-50 shadow-lg transition cursor-pointer">
           {initialData ? 'บันทึกการแก้ไข' : 'บันทึกพฤติกรรม'}
         </button>
       </div>
